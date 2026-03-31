@@ -1,0 +1,22 @@
+{
+  "qcc_company": {
+    "name": "企业基础信息",
+    "description": "提供企业工商信息、股东信息、主要人员等基础信息查询",
+    "endpoint": "/company/stream"
+  },
+  "qcc_ipr": {
+    "name": "企业知识产权",
+    "description": "提供企业商标、专利、著作权等知识产权查询",
+    "endpoint": "/ipr/stream"
+  },
+  "qcc_operation": {
+    "name": "企业经营信息",
+    "description": "提供企业经营异常、行政处罚、税务评级等经营信息查询",
+    "endpoint": "/operation/stream"
+  },
+  "qcc_risk": {
+    "name": "企业风险信息",
+    "description": "提供企业司法案件、被执行人、失信人等风险信息查询",
+    "endpoint": "/risk/stream"
+  }
+}
