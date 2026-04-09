@@ -11,15 +11,23 @@ async function listTools(serverName) {
   // 检查缓存是否过期，如果过期则自动更新
   if (configService.isToolsCacheExpired()) {
     console.log(chalk.gray('工具缓存已过期，正在从服务器更新...\n'));
-    const updated = await mcpService.ensureToolsCache(serverName);
-    if (updated) {
-      if (serverName) {
-        console.log(chalk.green(`已更新 ${serverName} 服务工具列表\n`));
+    try {
+      const updated = await mcpService.ensureToolsCache(serverName);
+      if (updated) {
+        if (serverName) {
+          console.log(chalk.green(`已更新 ${serverName} 服务工具列表\n`));
+        } else {
+          console.log(chalk.green('已更新所有服务工具列表\n'));
+        }
       } else {
-        console.log(chalk.green('已更新所有服务工具列表\n'));
+        console.log(chalk.yellow('缓存更新失败，使用已有缓存\n'));
       }
-    } else {
-      console.log(chalk.yellow('更新失败，使用静态配置\n'));
+    } catch (error) {
+      if (error.type === 'AUTH_FAILED') {
+        console.log(chalk.red('更新失败: 凭证不正确\n'));
+      } else {
+        console.log(chalk.yellow(`更新失败: ${error.message}\n`));
+      }
     }
   }
 

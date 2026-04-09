@@ -43,6 +43,33 @@ class QccError extends Error {
   }
 }
 
+function isAuthErrorResponse(status, data) {
+  const normalizedData = normalizeErrorData(data);
+
+  if (status === 401 || status === 403) {
+    return true;
+  }
+
+  const errorCode = normalizedData?.error?.code;
+  const messages = [normalizedData?.error?.message, normalizedData?.message].filter(Boolean);
+
+  return errorCode === 200001 || messages.some((message) => (
+    typeof message === 'string' && message.includes('身份凭证')
+  ));
+}
+
+function normalizeErrorData(data) {
+  if (!data || typeof data !== 'string') {
+    return data;
+  }
+
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    return data;
+  }
+}
+
 /**
  * 创建 HTTP 客户端
  * @param {object} options - 配置选项
@@ -53,7 +80,8 @@ function createHttpClient(options = {}) {
     timeout: options.timeout || 30000,
     headers: {
       'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream'
+      'Accept': 'application/json, text/event-stream',
+      'source': 'qcc-agent-cli'
     }
   });
 
@@ -81,10 +109,11 @@ function createHttpClient(options = {}) {
       }
       if (error.response) {
         const { status, data } = error.response;
-        if (status === 401 || status === 403) {
-          throw new QccError(ErrorType.AUTH_FAILED, '认证失败', {
+        const normalizedData = normalizeErrorData(data);
+        if (isAuthErrorResponse(status, normalizedData)) {
+          throw new QccError(ErrorType.AUTH_FAILED, normalizedData?.error?.message || normalizedData?.message || '认证失败', {
             code: status,
-            suggestion: '请检查 Authorization 是否正确，或运行 qcc init 更新配置'
+            suggestion: '身份凭证错误，请检查 Authorization 是否正确，或运行 qcc init 更新配置'
           });
         }
         if (status >= 500) {
@@ -94,7 +123,7 @@ function createHttpClient(options = {}) {
             suggestion: '服务器暂时不可用，请稍后重试'
           });
         }
-        throw new QccError(ErrorType.MCP_ERROR, data?.message || '请求失败', {
+        throw new QccError(ErrorType.MCP_ERROR, normalizedData?.message || '请求失败', {
           code: status,
           suggestion: '请检查请求参数是否正确'
         });
@@ -191,6 +220,8 @@ function handleError(error, context = {}) {
 module.exports = {
   ErrorType,
   QccError,
+  isAuthErrorResponse,
+  normalizeErrorData,
   createHttpClient,
   parseSSEResponse,
   extractMcpContent,

@@ -193,8 +193,8 @@ function isToolsCacheExpired() {
 }
 
 /**
- * 加载工具缓存
- * @returns {object|null} 缓存数据
+ * 加载工具缓存（严格检查过期）
+ * @returns {object|null} 缓存数据，过期时返回 null
  */
 function loadToolsCache() {
   try {
@@ -209,6 +209,25 @@ function loadToolsCache() {
       return null;
     }
 
+    return cache.data;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * 加载工具缓存（忽略过期，用于降级备用）
+ * @returns {object|null} 缓存数据，即使过期也返回
+ */
+function loadToolsCacheWithFallback() {
+  try {
+    if (!fs.existsSync(TOOLS_CACHE_FILE)) {
+      return null;
+    }
+    const content = fs.readFileSync(TOOLS_CACHE_FILE, 'utf-8');
+    const cache = JSON.parse(content);
+
+    // 不检查过期，直接返回数据（用于刷新失败时的降级）
     return cache.data;
   } catch (error) {
     return null;
@@ -314,6 +333,14 @@ function checkConfigIntegrity() {
   }
 }
 
+/**
+ * 获取工具缓存文件路径
+ * @returns {string} 缓存文件路径
+ */
+function getToolsCachePath() {
+  return TOOLS_CACHE_FILE;
+}
+
 module.exports = {
   // 配置读写
   load,
@@ -337,6 +364,8 @@ module.exports = {
   // 工具缓存
   saveToolsCache,
   loadToolsCache,
+  loadToolsCacheWithFallback,
   isToolsCacheExpired,
-  clearToolsCache
+  clearToolsCache,
+  getToolsCachePath
 };

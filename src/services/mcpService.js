@@ -11,6 +11,8 @@ class McpService {
     this.httpClient = createHttpClient();
     this._serverNameMap = null;
     this._toolsCache = null;
+    this._updateAttempted = false;
+    this._lastUpdateError = null;
   }
 
   /**
@@ -19,7 +21,7 @@ class McpService {
    * @returns {string} 简短名称 (如 "company")
    */
   static extractServerName(endpoint) {
-    const match = endpoint.match(/^\/([^\/]+)/);
+    const match = endpoint.match(/^\/([^/]+)/);
     return match ? match[1] : endpoint.replace(/^\//, '').replace(/\/.*$/, '');
   }
 
@@ -228,7 +230,11 @@ class McpService {
           tools
         };
       } catch (error) {
-        // 记录错误但继续获取其他服务器
+        // 认证错误立即抛出，让调用方处理
+        if (error instanceof QccError && error.type === ErrorType.AUTH_FAILED) {
+          throw error;
+        }
+        // 其他错误记录但继续获取其他服务器
         results[serverName] = {
           serverName,
           serverConfig: this.getServerByShortName(serverName),
@@ -243,13 +249,23 @@ class McpService {
 
   /**
    * 更新工具缓存
-   * @returns {Promise<object>} 更新结果
+   * @returns {Promise<object>} 更新结果（可能为空对象如果全部失败）
    */
   async updateToolsCache() {
-    const tools = await this.fetchAllTools();
-    configService.saveToolsCache(tools);
-    this._toolsCache = tools;
-    return tools;
+    const results = await this.fetchAllTools();
+
+    // 检查是否有成功的工具
+    const hasSuccess = Object.values(results).some(
+      (r) => r.tools && r.tools.length > 0
+    );
+
+    // 只有至少有一个服务成功时才保存缓存
+    if (hasSuccess) {
+      configService.saveToolsCache(results);
+      this._toolsCache = results;
+    }
+
+    return results;
   }
 
   /**
@@ -274,28 +290,57 @@ class McpService {
       return true;
     }
 
+    // 如果已经尝试过更新，不再重复尝试（也不重复抛出错误）
+    if (this._updateAttempted) {
+      return false;
+    }
+
     // 缓存过期，需要更新
+    this._updateAttempted = true;
     try {
       if (serverName) {
         // 只更新指定服务器的缓存
         const tools = await this.fetchToolsFromServer(serverName);
-        const existingCache = this.getCachedTools() || {};
 
-        existingCache[serverName] = {
-          serverName,
-          serverConfig: this.getServerByShortName(serverName),
-          tools
-        };
+        // 只有获取成功且有工具时才更新缓存
+        if (tools && tools.length > 0) {
+          const existingCache = this.getCachedTools() || {};
 
-        configService.saveToolsCache(existingCache);
-        this._toolsCache = existingCache;
+          existingCache[serverName] = {
+            serverName,
+            serverConfig: this.getServerByShortName(serverName),
+            tools
+          };
+
+          configService.saveToolsCache(existingCache);
+          this._toolsCache = existingCache;
+          this._updateAttempted = false;  // 成功后重置标记
+          return true;
+        }
+
+        return false;
       } else {
         // 更新所有服务器的缓存
-        await this.updateToolsCache();
+        const results = await this.updateToolsCache();
+
+        // 检查是否有成功的工具
+        const hasSuccess = Object.values(results).some(
+          (r) => r.tools && r.tools.length > 0
+        );
+
+        if (hasSuccess) {
+          this._updateAttempted = false;  // 成功后重置标记
+        }
+        return hasSuccess;
       }
-      return true;
     } catch (error) {
-      // 更新失败，返回 false（后续会尝试使用静态配置）
+      // 认证错误立即抛出，让调用方处理
+      if (error instanceof QccError && error.type === ErrorType.AUTH_FAILED) {
+        this._lastUpdateError = error;
+        throw error;
+      }
+      // 其他错误返回 false
+      this._lastUpdateError = error;
       return false;
     }
   }

@@ -52,16 +52,21 @@ async function init(options) {
       await mcpService.updateToolsCache();
       console.log(chalk.green('✓ 工具列表已更新!'));
     } catch (error) {
-      console.log(chalk.yellow('工具列表更新失败，将使用静态配置'));
-      console.log(chalk.gray(`错误: ${error.message}`));
+      if (error.type === 'AUTH_FAILED') {
+        console.log(chalk.red('✗ 凭证不正确，工具列表更新失败'));
+        console.log(chalk.yellow('建议: 请检查 Authorization 是否正确'));
+      } else {
+        console.log(chalk.yellow('工具列表更新失败'));
+        console.log(chalk.gray(`错误: ${error.message}`));
+      }
     }
     return;
   }
 
   // 无参数时显示使用说明
   console.log(chalk.yellow('请通过命令行参数进行配置：'));
-  console.log(chalk.gray('\n  qcc init --authorization <token>'));
-  console.log(chalk.gray('  qcc init --mcpBaseUrl <url> --authorization <token>'));
+  console.log(chalk.gray('\n  qcc init --authorization "Bearer YOUR_API_KEY"'));
+  console.log(chalk.gray('  qcc init --mcpBaseUrl <url> --authorization "Bearer YOUR_API_KEY"'));
   console.log(chalk.gray('\n提示: mcpBaseUrl 默认为 https://agent.qcc.com/mcp，通常可省略'));
   process.exit(1);
 }

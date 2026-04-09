@@ -55,7 +55,7 @@ async function check() {
     } else {
       console.log(chalk.red('  ✗') + ' authorization: 未配置');
     }
-    console.log(chalk.yellow('  请运行 qcc init --authorization <token>'));
+    console.log(chalk.yellow('  请运行 qcc init --authorization "Bearer YOUR_API_KEY"'));
     process.exit(1);
   }
 }

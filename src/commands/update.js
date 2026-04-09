@@ -11,7 +11,7 @@ async function updateTools() {
   // 检查配置
   if (!configService.isMcpConfigValid()) {
     console.error(chalk.red('错误: 配置不完整'));
-    console.log(chalk.yellow('请先运行 qcc init --authorization <token> 进行配置'));
+    console.log(chalk.yellow('请先运行 qcc init --authorization "Bearer YOUR_API_KEY" 进行配置'));
     process.exit(1);
   }
 
@@ -52,22 +52,32 @@ async function updateTools() {
     }
   }
 
-  // 保存到缓存
-  configService.saveToolsCache(allTools);
+  // 只有至少有一个服务成功时才保存缓存
+  if (results.success.length > 0) {
+    configService.saveToolsCache(allTools);
+    console.log(chalk.bold('\n更新结果:'));
+    console.log(chalk.green(`  成功: ${results.success.length} 个服务`));
+    console.log(chalk.green(`  工具: ${results.totalTools} 个`));
 
-  // 输出结果
-  console.log(chalk.bold('\n更新结果:'));
-  console.log(chalk.green(`  成功: ${results.success.length} 个服务`));
-  console.log(chalk.green(`  工具: ${results.totalTools} 个`));
+    if (results.failed.length > 0) {
+      console.log(chalk.yellow(`  失败: ${results.failed.length} 个服务`));
+      results.failed.forEach(f => {
+        console.log(chalk.yellow(`    - ${f.server}: ${f.error}`));
+      });
+    }
 
-  if (results.failed.length > 0) {
+    console.log(chalk.gray(`\n缓存已保存到: ${configService.getConfigPath().replace('config.json', 'cache/tools.json')}`));
+  } else {
+    // 所有服务都失败，不保存缓存
+    console.log(chalk.bold('\n更新结果:'));
+    console.log(chalk.red(`  成功: 0 个服务`));
     console.log(chalk.red(`  失败: ${results.failed.length} 个服务`));
     results.failed.forEach(f => {
       console.log(chalk.red(`    - ${f.server}: ${f.error}`));
     });
+    console.log(chalk.yellow('\n所有服务更新失败，缓存未更新'));
+    console.log(chalk.yellow('请检查身份凭证是否有效: qcc init --authorization "Bearer YOUR_API_KEY"'));
   }
-
-  console.log(chalk.gray(`\n缓存已保存到: ${configService.getConfigPath().replace('config.json', 'cache/tools.json')}`));
 }
 
 module.exports = {

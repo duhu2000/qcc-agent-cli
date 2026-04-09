@@ -1,22 +1,22 @@
 {
   "qcc_company": {
-    "name": "企业基础信息",
-    "description": "提供企业工商信息、股东信息、主要人员等基础信息查询",
+    "name": "企业信息",
+    "description": "多维度企业画像洞察，核验企业资质，评估发展轨迹，为商业决策提供数据支撑。",
     "endpoint": "/company/stream"
   },
   "qcc_ipr": {
-    "name": "企业知识产权",
-    "description": "提供企业商标、专利、著作权等知识产权查询",
+    "name": "知识产权",
+    "description": "知识产权布局分析，拆解品牌技术实力，为市场决策提供专业支持。",
     "endpoint": "/ipr/stream"
   },
   "qcc_operation": {
-    "name": "企业经营信息",
-    "description": "提供企业经营异常、行政处罚、税务评级等经营信息查询",
+    "name": "经营信息",
+    "description": "企业经营动态监测，还原企业经营现状，为合作决策提供商业情报。",
     "endpoint": "/operation/stream"
   },
   "qcc_risk": {
-    "name": "企业风险信息",
-    "description": "提供企业司法案件、被执行人、失信人等风险信息查询",
+    "name": "风险信息",
+    "description": "企业风险深度扫描，识别合规信用隐患，精准评估合作风险。",
     "endpoint": "/risk/stream"
   }
 }

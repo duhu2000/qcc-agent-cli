@@ -26,11 +26,20 @@ async function callMcp(serverName, toolName, params, options = {}) {
   // 检查缓存是否过期，如果过期则自动更新指定服务器的工具列表
   if (configService.isToolsCacheExpired()) {
     console.log(chalk.gray('工具缓存已过期，正在从服务器更新...\n'));
-    const updated = await mcpService.ensureToolsCache(serverName);
-    if (updated) {
-      console.log(chalk.green(`已更新 ${serverName} 服务工具列表\n`));
-    } else {
-      console.log(chalk.yellow('更新失败，使用静态配置\n'));
+    try {
+      const updated = await mcpService.ensureToolsCache(serverName);
+      if (!updated) {
+        console.log(chalk.yellow('缓存更新失败，使用已有缓存\n'));
+      }
+    } catch (error) {
+      if (error.type === 'AUTH_FAILED') {
+        console.log(chalk.red('更新失败: 凭证不正确\n'));
+        console.error(chalk.red('错误: 工具列表获取失败'));
+        console.log(chalk.yellow('建议: 请检查 Authorization 是否正确，或运行 qcc init 更新配置'));
+        process.exit(1);
+      } else {
+        console.log(chalk.yellow(`更新失败: ${error.message}\n`));
+      }
     }
   }
 
@@ -41,6 +50,7 @@ async function callMcp(serverName, toolName, params, options = {}) {
     const shortNames = mcpService.getShortServerNames();
     console.error(chalk.red(`错误: 未找到工具 "${serverName}/${toolName}"`));
     console.log(chalk.yellow('使用 "qcc list-tools" 查看可用工具'));
+    console.log(chalk.yellow('或运行 "qcc update" 更新工具列表'));
     console.log(chalk.yellow(`可用服务: ${shortNames.join(', ')}`));
     process.exit(1);
     return;

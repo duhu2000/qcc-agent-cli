@@ -1,29 +1,49 @@
 #!/usr/bin/env node
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const updateNotifierModule = require('update-notifier');
+const updateNotifier = updateNotifierModule.default || updateNotifierModule;
+const pkg = require('../package.json');
 const { createProgram } = require('../src/cliSetup');
 
-// 创建并运行 CLI 程序
-const program = createProgram();
+const updateConfigPath = path.join(
+  process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
+  'configstore',
+  `update-notifier-${pkg.name}.json`
+);
+const isFirstUpdateCheck = !fs.existsSync(updateConfigPath);
 
-// 全局错误处理（捕获未被子命令处理的错误）
-program.exitOverride((err) => {
-  // 处理未知选项错误（在全局级别）
-  if (err.code === 'commander.unknownOption') {
-    // 由子命令处理，这里静默退出
+updateNotifier({
+  pkg,
+  updateCheckInterval: isFirstUpdateCheck ? 0 : 1000 * 60 * 60 * 12
+}).notify({ isGlobal: true });
+
+async function main() {
+  const program = await createProgram(process.argv.slice(2));
+
+  program.exitOverride((err) => {
+    if (err.code === 'commander.help' || err.code === 'commander.version') {
+      process.exit(0);
+    }
+
+    if (err.code === 'commander.unknownOption') {
+      process.exit(1);
+    }
+
+    if (err.code === 'commander.optionMissingArgument') {
+      console.error('错误: 参数缺少值');
+      process.exit(1);
+    }
+
     process.exit(1);
-  }
+  });
 
-  // 处理缺少参数值错误
-  if (err.code === 'commander.optionMissingArgument') {
-    console.error(`错误: 参数缺少值`);
-    process.exit(1);
-  }
+  program.parse();
+}
 
-  // 其他错误静默处理
-  if (err.code !== 'commander.help' && err.code !== 'commander.version') {
-    // 不打印错误，由具体处理器打印
-  }
+main().catch((error) => {
+  console.error('CLI 启动失败:', error.message);
   process.exit(1);
 });
-
-program.parse();

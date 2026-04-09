@@ -4,10 +4,9 @@
  */
 
 const configService = require('../services/configService');
-const mcpTools = require('../config/mcpTools');
 
 /**
- * 获取缓存的工具列表
+ * 获取缓存的工具列表（严格检查过期）
  * @returns {object|null} 缓存数据
  */
 function getCachedTools() {
@@ -15,54 +14,63 @@ function getCachedTools() {
 }
 
 /**
- * 获取服务器的所有工具（优先缓存，无缓存或空缓存则使用静态配置）
+ * 获取缓存的工具列表（忽略过期，用于降级备用）
+ * @returns {object|null} 缓存数据
+ */
+function getCachedToolsWithFallback() {
+  return configService.loadToolsCacheWithFallback();
+}
+
+/**
+ * 获取服务器的所有工具（从缓存获取，无缓存返回空数组）
  * @param {string} serverName - 服务器名称（简短名如 "company"）
  * @returns {Array} 工具列表
  */
 function getServerToolsFromCache(serverName) {
-  // 尝试从缓存获取
   const cache = getCachedTools();
-  const cachedTools = cache?.[serverName]?.tools;
-
-  // 缓存有效且有工具时返回缓存数据
-  if (cachedTools && cachedTools.length > 0) {
-    return cachedTools;
-  }
-
-  // 回退到静态配置
-  const serverKey = `qcc_${serverName}`;
-  return mcpTools[serverKey]?.tools || [];
+  return cache?.[serverName]?.tools || [];
 }
 
 /**
- * 获取工具定义（优先缓存，无缓存或空缓存则使用静态配置）
+ * 获取服务器的所有工具（使用降级缓存）
+ * @param {string} serverName - 服务器名称（简短名如 "company"）
+ * @returns {Array} 工具列表
+ */
+function getServerToolsFromCacheWithFallback(serverName) {
+  const cache = getCachedToolsWithFallback();
+  return cache?.[serverName]?.tools || [];
+}
+
+/**
+ * 获取工具定义（从缓存获取）
  * @param {string} serverName - 服务器名称（简短名）
  * @param {string} toolName - 工具名称
  * @returns {object|null} 工具定义
  */
 function getToolDefinition(serverName, toolName) {
-  // 使用 getServerToolsFromCache 确保一致性
   const tools = getServerToolsFromCache(serverName);
   return tools.find(t => t.name === toolName) || null;
 }
 
 /**
- * 获取所有工具的扁平列表
+ * 获取所有工具的扁平列表（从缓存获取）
  * @returns {Array<object>} 工具列表，每项包含 server, serverName, name, description, inputSchema
  */
 function getAllToolsFlat() {
+  const cache = getCachedTools();
+  if (!cache) return [];
+
   const tools = [];
 
-  // 使用 getServerToolsFromCache 确保一致性，遍历所有服务
-  Object.keys(mcpTools).forEach((fullKey) => {
-    const shortName = fullKey.replace(/^qcc_/, '');
-    const serverTools = getServerToolsFromCache(shortName);
-    const serverConfig = mcpTools[fullKey];
+  Object.keys(cache).forEach((serverName) => {
+    const serverData = cache[serverName];
+    const serverTools = serverData?.tools || [];
+    const serverConfig = serverData?.serverConfig;
 
     serverTools.forEach((tool) => {
       tools.push({
-        server: shortName,
-        serverName: serverConfig.name,
+        server: serverName,
+        serverName: serverConfig?.name || serverName,
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema
@@ -75,7 +83,9 @@ function getAllToolsFlat() {
 
 module.exports = {
   getCachedTools,
+  getCachedToolsWithFallback,
   getServerToolsFromCache,
+  getServerToolsFromCacheWithFallback,
   getToolDefinition,
   getAllToolsFlat
 };
