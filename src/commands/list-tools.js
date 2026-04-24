@@ -5,10 +5,9 @@ const { getServerToolsFromCache, getAllToolsFlat: getToolsFlat } = require('../u
 
 /**
  * 显示 MCP 工具列表
- * @param {string} [serverName] - 可选，指定服务器名称
+ * @param {string} [serverName] - 可选，指定服务名
  */
 async function listTools(serverName) {
-  // 检查缓存是否过期，如果过期则自动更新
   if (configService.isToolsCacheExpired()) {
     console.log(chalk.gray('工具缓存已过期，正在从服务器更新...\n'));
     try {
@@ -20,19 +19,26 @@ async function listTools(serverName) {
           console.log(chalk.green('已更新所有服务工具列表\n'));
         }
       } else {
+        const failureSummary = mcpService.getLastUpdateFailureSummary();
         console.log(chalk.yellow('缓存更新失败，使用已有缓存\n'));
+        if (failureSummary?.message) {
+          console.log(chalk.yellow(`${failureSummary.message}\n`));
+        }
       }
     } catch (error) {
       if (error.type === 'AUTH_FAILED') {
         console.log(chalk.red('更新失败: 凭证不正确\n'));
       } else {
+        const failureSummary = mcpService.getFailureSummaryFromError(error);
         console.log(chalk.yellow(`更新失败: ${error.message}\n`));
+        if (failureSummary?.message) {
+          console.log(chalk.yellow(`${failureSummary.message}\n`));
+        }
       }
     }
   }
 
   if (serverName) {
-    // 显示指定服务器的工具
     const tools = getServerToolsFromCache(serverName);
     const serverConfig = mcpService.getServerByShortName(serverName);
 
@@ -67,7 +73,6 @@ async function listTools(serverName) {
       console.log();
     });
   } else {
-    // 显示所有服务器
     console.log(chalk.bold('\n可用 MCP 服务:\n'));
 
     const shortNames = mcpService.getShortServerNames();
@@ -90,23 +95,13 @@ async function listTools(serverName) {
   }
 }
 
-/**
- * 获取所有工具的扁平列表
- * @returns {Array<object>} 工具列表
- */
 function getAllToolsFlat() {
   return getToolsFlat();
 }
 
-/**
- * 查找工具
- * @param {string} serverName - 服务器名称（简短名）
- * @param {string} toolName - 工具名称
- * @returns {object|null} 工具信息
- */
 function findTool(serverName, toolName) {
   const tools = getServerToolsFromCache(serverName);
-  return tools.find(t => t.name === toolName) || null;
+  return tools.find((t) => t.name === toolName) || null;
 }
 
 module.exports = {

@@ -1,20 +1,26 @@
 const chalk = require('chalk');
 const mcpService = require('../services/mcpService');
 const { findTool } = require('./list-tools');
-const { QccError, ErrorType } = require('../utils/httpClient');
+const { QccError } = require('../utils/httpClient');
 const { jsonToMarkdown } = require('../utils/jsonToMarkdown');
 const validator = require('../utils/validator');
 const configService = require('../services/configService');
 
-/**
- * 调用 MCP 工具
- * @param {string} serverName - 服务器名称（简短名，如 "company"）
- * @param {string} toolName - 工具名称
- * @param {object} params - 工具参数
- * @param {object} options - 命令选项（包含 json 标志）
- */
+function printJsonRpcError(result) {
+  console.error(chalk.red(`  code: ${result.error?.code ?? '-'}`));
+  console.error(chalk.red(`  message: ${result.error?.message || '-'}`));
+
+  if (Object.prototype.hasOwnProperty.call(result.error || {}, 'data')) {
+    const data = result.error.data == null
+      ? '-'
+      : typeof result.error.data === 'string'
+        ? result.error.data
+        : JSON.stringify(result.error.data, null, 2);
+    console.error(chalk.red(`  data: ${data}`));
+  }
+}
+
 async function callMcp(serverName, toolName, params, options = {}) {
-  // 先检查配置是否有效
   if (!configService.isMcpConfigValid()) {
     console.error(chalk.red('\n错误: 未找到配置文件或配置不完整'));
     console.error(chalk.yellow('\n请先初始化配置:'));
@@ -23,13 +29,16 @@ async function callMcp(serverName, toolName, params, options = {}) {
     process.exit(1);
   }
 
-  // 检查缓存是否过期，如果过期则自动更新指定服务器的工具列表
   if (configService.isToolsCacheExpired()) {
     console.log(chalk.gray('工具缓存已过期，正在从服务器更新...\n'));
     try {
       const updated = await mcpService.ensureToolsCache(serverName);
       if (!updated) {
+        const failureSummary = mcpService.getLastUpdateFailureSummary();
         console.log(chalk.yellow('缓存更新失败，使用已有缓存\n'));
+        if (failureSummary?.message) {
+          console.log(chalk.yellow(`${failureSummary.message}\n`));
+        }
       }
     } catch (error) {
       if (error.type === 'AUTH_FAILED') {
@@ -38,14 +47,16 @@ async function callMcp(serverName, toolName, params, options = {}) {
         console.log(chalk.yellow('建议: 请检查 Authorization 是否正确，或运行 qcc init 更新配置'));
         process.exit(1);
       } else {
+        const failureSummary = mcpService.getFailureSummaryFromError(error);
         console.log(chalk.yellow(`更新失败: ${error.message}\n`));
+        if (failureSummary?.message) {
+          console.log(chalk.yellow(`${failureSummary.message}\n`));
+        }
       }
     }
   }
 
-  // 查找工具定义
   const tool = findTool(serverName, toolName);
-
   if (!tool) {
     const shortNames = mcpService.getShortServerNames();
     console.error(chalk.red(`错误: 未找到工具 "${serverName}/${toolName}"`));
@@ -56,14 +67,15 @@ async function callMcp(serverName, toolName, params, options = {}) {
     return;
   }
 
-  // 使用扩展的验证器进行参数验证（白名单 + 必填）
   const validation = validator.validateMcpTool(tool, params);
   if (!validation.valid) {
-    console.error(chalk.red('错误: 参数验证失败'));
-    validation.errors.forEach(err => console.error(chalk.red(`  - ${err}`)));
-    console.log(chalk.yellow('\n工具参数说明:'));
+    console.error(chalk.red('错误: 参数校验失败'));
+    validation.errors.forEach((err) => console.error(chalk.red(`  - ${err}`)));
+
     const props = tool.inputSchema?.properties || {};
     const required = tool.inputSchema?.required || [];
+
+    console.log(chalk.yellow('\n工具参数说明:'));
     Object.entries(props).forEach(([key, value]) => {
       const isRequired = required.includes(key);
       const reqMark = isRequired ? chalk.red('(必填)') : chalk.gray('(可选)');
@@ -72,28 +84,29 @@ async function callMcp(serverName, toolName, params, options = {}) {
     process.exit(1);
   }
 
-  // 调用 MCP 服务
   try {
     console.log(chalk.gray(`正在调用 ${serverName}/${toolName}...\n`));
 
     const result = await mcpService.callTool(serverName, toolName, validation.params);
 
-    // 根据 --json 选项决定输出格式
+    if (!options.json && result?.error) {
+      printJsonRpcError(result);
+      process.exit(1);
+      return;
+    }
+
     if (options.json) {
-      // 输出原始 JSON
       try {
         console.log(JSON.stringify(result, null, 2));
-      } catch (e) {
-        console.error(chalk.red('错误：无法序列化响应数据'));
+      } catch (error) {
+        console.error(chalk.red('错误: 无法序列化响应数据'));
         console.log(String(result));
       }
     } else {
-      // 尝试解析为 Markdown 格式
       const markdown = jsonToMarkdown(result);
       if (markdown) {
         console.log(markdown);
       } else {
-        // 无法格式化时输出原始 JSON
         console.log(JSON.stringify(result, null, 2));
       }
     }

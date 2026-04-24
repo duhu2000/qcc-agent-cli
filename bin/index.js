@@ -24,7 +24,12 @@ async function main() {
   const program = await createProgram(process.argv.slice(2));
 
   program.exitOverride((err) => {
-    if (err.code === 'commander.help' || err.code === 'commander.version') {
+    if (
+      err.code === 'commander.help'
+      || err.code === 'commander.version'
+      || err.code === 'commander.helpDisplayed'
+      || err.message === '(outputHelp)'
+    ) {
       process.exit(0);
     }
 
@@ -44,6 +49,15 @@ async function main() {
 }
 
 main().catch((error) => {
+  if (
+    error?.code === 'commander.help'
+    || error?.code === 'commander.version'
+    || error?.code === 'commander.helpDisplayed'
+    || error?.message === '(outputHelp)'
+  ) {
+    process.exit(0);
+  }
+
   console.error('CLI 启动失败:', error.message);
   process.exit(1);
 });

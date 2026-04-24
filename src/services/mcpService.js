@@ -1,11 +1,14 @@
-const { createHttpClient, parseSSEResponse, extractMcpContent, QccError, ErrorType } = require('../utils/httpClient');
+const {
+  createHttpClient,
+  parseSSEResponse,
+  extractMcpContent,
+  QccError,
+  ErrorType,
+  isAuthErrorResponse
+} = require('../utils/httpClient');
 const configService = require('./configService');
 const mcpServers = require('../config/mcpServers.json');
 
-/**
- * MCP 服务类
- * 处理与 MCP 服务器的通信
- */
 class McpService {
   constructor() {
     this.httpClient = createHttpClient();
@@ -13,28 +16,20 @@ class McpService {
     this._toolsCache = null;
     this._updateAttempted = false;
     this._lastUpdateError = null;
+    this._lastUpdateResults = null;
   }
 
-  /**
-   * 从 endpoint 提取简短服务名（静态方法）
-   * @param {string} endpoint - 端点路径 (如 "/company/stream")
-   * @returns {string} 简短名称 (如 "company")
-   */
   static extractServerName(endpoint) {
     const match = endpoint.match(/^\/([^/]+)/);
     return match ? match[1] : endpoint.replace(/^\//, '').replace(/\/.*$/, '');
   }
 
-  /**
-   * 获取服务名映射（静态方法，无缓存）
-   * @returns {Map<string, object>}
-   */
   static getServerNameMap() {
     const map = new Map();
-    Object.entries(mcpServers).forEach(([fullKey, config]) => {
+    Object.entries(mcpServers).forEach(([fullName, config]) => {
       const shortName = McpService.extractServerName(config.endpoint);
       map.set(shortName, {
-        fullName: fullKey,
+        fullName,
         shortName,
         ...config
       });
@@ -42,10 +37,6 @@ class McpService {
     return map;
   }
 
-  /**
-   * 获取服务名映射（实例方法，带缓存）
-   * @returns {Map<string, object>}
-   */
   getServerNameMap() {
     if (!this._serverNameMap) {
       this._serverNameMap = McpService.getServerNameMap();
@@ -53,36 +44,18 @@ class McpService {
     return this._serverNameMap;
   }
 
-  /**
-   * 获取简短服务名列表
-   * @returns {string[]}
-   */
   getShortServerNames() {
     return Array.from(this.getServerNameMap().keys());
   }
 
-  /**
-   * 根据简短名获取服务配置
-   * @param {string} shortName - 简短名称 (如 "company")
-   * @returns {object|null}
-   */
   getServerByShortName(shortName) {
     return this.getServerNameMap().get(shortName) || null;
   }
 
-  /**
-   * 调用 MCP 工具
-   * @param {string} serverName - 服务器名称 (支持简短名如 "company" 或完整名如 "qcc_company")
-   * @param {string} toolName - 工具名称 (如 get_company_registration_info)
-   * @param {object} args - 工具参数
-   * @returns {Promise<object>} 工具执行结果
-   */
-  async callTool(serverName, toolName, args) {
-    // 支持简短名和完整名
+  resolveServerConfig(serverName) {
     let serverConfig = this.getServerByShortName(serverName);
 
     if (!serverConfig && mcpServers[serverName]) {
-      // 使用完整名
       serverConfig = {
         fullName: serverName,
         shortName: McpService.extractServerName(mcpServers[serverName].endpoint),
@@ -98,12 +71,14 @@ class McpService {
       );
     }
 
-    const config = configService.getMcpConfig();
+    return serverConfig;
+  }
 
-    // 构建请求 URL
+  async callTool(serverName, toolName, args) {
+    const serverConfig = this.resolveServerConfig(serverName);
+    const config = configService.getMcpConfig();
     const url = `${config.baseUrl}${serverConfig.endpoint}`;
 
-    // 构建请求体
     const payload = {
       jsonrpc: '2.0',
       id: Date.now(),
@@ -120,9 +95,10 @@ class McpService {
     try {
       const response = await this.httpClient.post(url, payload, {
         headers: {
-          'Authorization': config.authorization,
-          'Accept': 'application/json, text/event-stream'
+          Authorization: config.authorization,
+          Accept: 'application/json, text/event-stream'
         },
+        timeout: config.timeout,
         responseType: 'text'
       });
 
@@ -131,6 +107,7 @@ class McpService {
       if (error instanceof QccError) {
         throw error;
       }
+
       throw new QccError(
         ErrorType.MCP_ERROR,
         `调用 MCP 工具失败: ${error.message}`,
@@ -139,21 +116,8 @@ class McpService {
     }
   }
 
-  /**
-   * 从 MCP 服务获取工具列表
-   * @param {string} serverName - 服务器名称
-   * @returns {Promise<Array>} 工具列表
-   */
   async fetchToolsFromServer(serverName) {
-    const serverConfig = this.getServerByShortName(serverName);
-    if (!serverConfig) {
-      throw new QccError(
-        ErrorType.SERVER_NOT_FOUND,
-        `未知的服务器: ${serverName}`,
-        { suggestion: `可用服务器: ${this.getShortServerNames().join(', ')}` }
-      );
-    }
-
+    const serverConfig = this.resolveServerConfig(serverName);
     const config = configService.getMcpConfig();
     const url = `${config.baseUrl}${serverConfig.endpoint}`;
 
@@ -167,19 +131,19 @@ class McpService {
     try {
       const response = await this.httpClient.post(url, payload, {
         headers: {
-          'Authorization': config.authorization,
-          'Accept': 'application/json, text/event-stream'
+          Authorization: config.authorization,
+          Accept: 'application/json, text/event-stream'
         },
+        timeout: config.timeout,
         responseType: 'text'
       });
 
-      // 解析响应并提取工具列表
-      const parsed = this.parseToolsListResponse(response.data);
-      return parsed || [];
+      return this.parseToolsListResponse(response.data) || [];
     } catch (error) {
       if (error instanceof QccError) {
         throw error;
       }
+
       throw new QccError(
         ErrorType.MCP_ERROR,
         `获取工具列表失败: ${error.message}`,
@@ -188,40 +152,56 @@ class McpService {
     }
   }
 
-  /**
-   * 解析 tools/list 响应
-   * @param {string} data - 响应数据
-   * @returns {Array|null} 工具列表
-   */
   parseToolsListResponse(data) {
-    // 先尝试解析 SSE 格式
+    const throwMcpResponseError = (response) => {
+      if (!response?.error) {
+        return;
+      }
+
+      const code = typeof response.error.code === 'number' ? response.error.code : undefined;
+      const message = response.error.message || '获取工具列表失败';
+
+      if (isAuthErrorResponse(code, response)) {
+        throw new QccError(ErrorType.AUTH_FAILED, message, {
+          code,
+          suggestion: '身份凭证错误，请检查 Authorization 是否正确，或运行 qcc init 更新配置'
+        });
+      }
+
+      throw new QccError(ErrorType.MCP_ERROR, message, {
+        code,
+        suggestion: '请检查服务权限或稍后重试'
+      });
+    };
+
     const sseData = parseSSEResponse(data);
-    if (sseData?.result?.tools) {
-      return sseData.result.tools;
+    if (sseData) {
+      throwMcpResponseError(sseData);
+      if (Array.isArray(sseData?.result?.tools)) {
+        return sseData.result.tools;
+      }
     }
 
-    // 尝试解析普通 JSON
     try {
       const jsonData = JSON.parse(data);
-      if (jsonData?.result?.tools) {
+      throwMcpResponseError(jsonData);
+      if (Array.isArray(jsonData?.result?.tools)) {
         return jsonData.result.tools;
       }
-    } catch (e) {
-      // 解析失败
+    } catch (error) {
+      if (error instanceof QccError) {
+        throw error;
+      }
     }
 
     return null;
   }
 
-  /**
-   * 从所有 MCP 服务获取工具列表
-   * @returns {Promise<object>} 服务器名 -> 工具列表
-   */
   async fetchAllTools() {
     const results = {};
     const serverNames = this.getShortServerNames();
 
-    for (const serverName of serverNames) {
+    await Promise.all(serverNames.map(async (serverName) => {
       try {
         const tools = await this.fetchToolsFromServer(serverName);
         results[serverName] = {
@@ -230,37 +210,101 @@ class McpService {
           tools
         };
       } catch (error) {
-        // 认证错误立即抛出，让调用方处理
         if (error instanceof QccError && error.type === ErrorType.AUTH_FAILED) {
           throw error;
         }
-        // 其他错误记录但继续获取其他服务器
+
         results[serverName] = {
           serverName,
           serverConfig: this.getServerByShortName(serverName),
           tools: [],
-          error: error.message
+          error: error.message,
+          errorType: error.type,
+          suggestion: error.suggestion
         };
       }
-    }
+    }));
 
+    this._lastUpdateResults = results;
+    this._lastUpdateError = null;
     return results;
   }
 
-  /**
-   * 更新工具缓存
-   * @returns {Promise<object>} 更新结果（可能为空对象如果全部失败）
-   */
+  hasSuccessfulResults(results = {}) {
+    return Object.values(results).some((result) => !result.error);
+  }
+
+  getUpdateFailureSummary(results = {}) {
+    const failures = Object.values(results).filter((result) => result.error);
+    if (failures.length === 0) {
+      return null;
+    }
+
+    const authFailure = failures.find((result) => result.errorType === ErrorType.AUTH_FAILED);
+    if (authFailure) {
+      return {
+        message: '请检查身份凭证是否有效: qcc init --authorization "Bearer YOUR_API_KEY"',
+        suggestion: authFailure.suggestion || '请检查 Authorization 是否正确，或运行 qcc init 更新配置'
+      };
+    }
+
+    const serverFailure = failures.find((result) => result.errorType === ErrorType.SERVER_ERROR);
+    if (serverFailure) {
+      return {
+        message: '请检查网络连接，或稍后重试',
+        suggestion: serverFailure.suggestion || '请检查网络连接，或稍后重试'
+      };
+    }
+
+    const networkFailure = failures.find((result) => (
+      result.errorType === ErrorType.NETWORK_ERROR || result.errorType === ErrorType.TIMEOUT
+    ));
+    if (networkFailure) {
+      return {
+        message: '请检查网络连接，或稍后重试',
+        suggestion: networkFailure.suggestion || '请检查网络连接，或稍后重试'
+      };
+    }
+
+    const firstFailure = failures[0];
+    return {
+      message: firstFailure.suggestion || '请检查请求配置或稍后重试',
+      suggestion: firstFailure.suggestion || ''
+    };
+  }
+
+  getFailureSummaryFromError(error) {
+    if (!error) {
+      return null;
+    }
+
+    return this.getUpdateFailureSummary({
+      latest: {
+        error: error.message,
+        errorType: error.type,
+        suggestion: error.suggestion
+      }
+    });
+  }
+
+  getLastUpdateFailureSummary() {
+    if (this._lastUpdateResults) {
+      return this.getUpdateFailureSummary(this._lastUpdateResults);
+    }
+
+    if (this._lastUpdateError) {
+      return this.getFailureSummaryFromError(this._lastUpdateError);
+    }
+
+    return null;
+  }
+
   async updateToolsCache() {
     const results = await this.fetchAllTools();
+    this._lastUpdateResults = results;
+    this._lastUpdateError = null;
 
-    // 检查是否有成功的工具
-    const hasSuccess = Object.values(results).some(
-      (r) => r.tools && r.tools.length > 0
-    );
-
-    // 只有至少有一个服务成功时才保存缓存
-    if (hasSuccess) {
+    if (this.hasSuccessfulResults(results)) {
       configService.saveToolsCache(results);
       this._toolsCache = results;
     }
@@ -268,10 +312,6 @@ class McpService {
     return results;
   }
 
-  /**
-   * 获取缓存的工具列表
-   * @returns {object|null}
-   */
   getCachedTools() {
     if (this._toolsCache) {
       return this._toolsCache;
@@ -279,77 +319,57 @@ class McpService {
     return configService.loadToolsCache();
   }
 
-  /**
-   * 确保工具缓存有效（如果过期则自动更新）
-   * @param {string} [serverName] - 可选，指定只更新某个服务器的缓存
-   * @returns {Promise<boolean>} 是否成功更新或缓存有效
-   */
   async ensureToolsCache(serverName) {
-    // 检查缓存是否过期
     if (!configService.isToolsCacheExpired()) {
       return true;
     }
 
-    // 如果已经尝试过更新，不再重复尝试（也不重复抛出错误）
     if (this._updateAttempted) {
       return false;
     }
 
-    // 缓存过期，需要更新
     this._updateAttempted = true;
+
     try {
       if (serverName) {
-        // 只更新指定服务器的缓存
         const tools = await this.fetchToolsFromServer(serverName);
 
-        // 只有获取成功且有工具时才更新缓存
-        if (tools && tools.length > 0) {
+        if (tools && tools.length >= 0) {
           const existingCache = this.getCachedTools() || {};
-
           existingCache[serverName] = {
             serverName,
             serverConfig: this.getServerByShortName(serverName),
-            tools
+            tools: tools || []
           };
 
           configService.saveToolsCache(existingCache);
           this._toolsCache = existingCache;
-          this._updateAttempted = false;  // 成功后重置标记
+          this._updateAttempted = false;
           return true;
         }
 
         return false;
-      } else {
-        // 更新所有服务器的缓存
-        const results = await this.updateToolsCache();
-
-        // 检查是否有成功的工具
-        const hasSuccess = Object.values(results).some(
-          (r) => r.tools && r.tools.length > 0
-        );
-
-        if (hasSuccess) {
-          this._updateAttempted = false;  // 成功后重置标记
-        }
-        return hasSuccess;
       }
+
+      const results = await this.updateToolsCache();
+      const hasSuccess = this.hasSuccessfulResults(results);
+
+      if (hasSuccess) {
+        this._updateAttempted = false;
+      }
+
+      return hasSuccess;
     } catch (error) {
-      // 认证错误立即抛出，让调用方处理
       if (error instanceof QccError && error.type === ErrorType.AUTH_FAILED) {
         this._lastUpdateError = error;
         throw error;
       }
-      // 其他错误返回 false
+
       this._lastUpdateError = error;
       return false;
     }
   }
 
-  /**
-   * 解析 MCP 响应
-   * @param {string} data - 响应数据
-   * @returns {object} 解析后的结果
-   */
   parseResponse(data) {
     const sseData = parseSSEResponse(data);
     if (sseData) {
@@ -359,15 +379,11 @@ class McpService {
     try {
       const jsonData = JSON.parse(data);
       return extractMcpContent(jsonData);
-    } catch (e) {
+    } catch (error) {
       return data;
     }
   }
 
-  /**
-   * 获取所有可用的服务器列表
-   * @returns {Array<object>} 服务器列表
-   */
   getServers() {
     return Array.from(this.getServerNameMap().entries()).map(([shortName, config]) => ({
       name: shortName,
@@ -378,15 +394,9 @@ class McpService {
     }));
   }
 
-  /**
-   * 获取指定服务器的信息
-   * @param {string} serverName - 服务器名称（支持简短名或完整名）
-   * @returns {object|null} 服务器信息
-   */
   getServerInfo(serverName) {
     const config = this.getServerByShortName(serverName);
     if (!config) {
-      // 尝试完整名
       if (mcpServers[serverName]) {
         return {
           name: McpService.extractServerName(mcpServers[serverName].endpoint),
@@ -408,22 +418,14 @@ class McpService {
     };
   }
 
-  /**
-   * 检查 MCP 配置是否有效
-   * @returns {boolean} 是否有效
-   */
   isConfigured() {
     return configService.isMcpConfigValid();
   }
 }
 
-// 导出单例实例
 const mcpService = new McpService();
 
-// 导出实例作为默认导出
 module.exports = mcpService;
-
-// 同时导出类和静态方法，便于测试和直接使用
 module.exports.McpService = McpService;
 module.exports.extractServerName = McpService.extractServerName;
 module.exports.getServerNameMap = McpService.getServerNameMap;

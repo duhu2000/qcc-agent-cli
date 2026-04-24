@@ -1,30 +1,26 @@
 const axios = require('axios');
 const chalk = require('chalk');
+const { version } = require('../../package.json');
 
 /**
  * 错误类型枚举
  */
 const ErrorType = {
-  // 配置错误
   CONFIG_NOT_FOUND: 'CONFIG_NOT_FOUND',
   CONFIG_INVALID: 'CONFIG_INVALID',
   CONFIG_MISSING_FIELD: 'CONFIG_MISSING_FIELD',
 
-  // 认证错误
   AUTH_FAILED: 'AUTH_FAILED',
   TOKEN_EXPIRED: 'TOKEN_EXPIRED',
 
-  // 网络错误
   NETWORK_ERROR: 'NETWORK_ERROR',
   TIMEOUT: 'TIMEOUT',
   SERVER_ERROR: 'SERVER_ERROR',
 
-  // 工具错误
   TOOL_NOT_FOUND: 'TOOL_NOT_FOUND',
   SERVER_NOT_FOUND: 'SERVER_NOT_FOUND',
   INVALID_TOOL_ARGS: 'INVALID_TOOL_ARGS',
 
-  // MCP 错误
   MCP_ERROR: 'MCP_ERROR',
   MCP_PARSE_ERROR: 'MCP_PARSE_ERROR'
 };
@@ -43,6 +39,18 @@ class QccError extends Error {
   }
 }
 
+function normalizeErrorData(data) {
+  if (!data || typeof data !== 'string') {
+    return data;
+  }
+
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    return data;
+  }
+}
+
 function isAuthErrorResponse(status, data) {
   const normalizedData = normalizeErrorData(data);
 
@@ -58,18 +66,6 @@ function isAuthErrorResponse(status, data) {
   ));
 }
 
-function normalizeErrorData(data) {
-  if (!data || typeof data !== 'string') {
-    return data;
-  }
-
-  try {
-    return JSON.parse(data);
-  } catch (error) {
-    return data;
-  }
-}
-
 /**
  * 创建 HTTP 客户端
  * @param {object} options - 配置选项
@@ -81,25 +77,18 @@ function createHttpClient(options = {}) {
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',
-      'source': 'qcc-agent-cli'
+      'source': 'qcc-agent-cli',
+      'source-version': version
     }
   });
 
-  // 请求拦截器
   client.interceptors.request.use(
-    (config) => {
-      return config;
-    },
-    (error) => {
-      return Promise.reject(error);
-    }
+    (config) => config,
+    (error) => Promise.reject(error)
   );
 
-  // 响应拦截器
   client.interceptors.response.use(
-    (response) => {
-      return response;
-    },
+    (response) => response,
     (error) => {
       if (error.code === 'ECONNABORTED') {
         throw new QccError(ErrorType.TIMEOUT, '请求超时', {
@@ -107,33 +96,43 @@ function createHttpClient(options = {}) {
           suggestion: '请检查网络连接后重试'
         });
       }
+
       if (error.response) {
         const { status, data } = error.response;
         const normalizedData = normalizeErrorData(data);
+
         if (isAuthErrorResponse(status, normalizedData)) {
-          throw new QccError(ErrorType.AUTH_FAILED, normalizedData?.error?.message || normalizedData?.message || '认证失败', {
-            code: status,
-            suggestion: '身份凭证错误，请检查 Authorization 是否正确，或运行 qcc init 更新配置'
-          });
+          throw new QccError(
+            ErrorType.AUTH_FAILED,
+            normalizedData?.error?.message || normalizedData?.message || '认证失败',
+            {
+              code: status,
+              suggestion: '身份凭证错误，请检查 Authorization 是否正确，或运行 qcc init 更新配置'
+            }
+          );
         }
+
         if (status >= 500) {
           throw new QccError(ErrorType.SERVER_ERROR, `服务器错误: ${status}`, {
             code: status,
             recoverable: true,
-            suggestion: '服务器暂时不可用，请稍后重试'
+            suggestion: '请检查网络连接，或稍后重试'
           });
         }
+
         throw new QccError(ErrorType.MCP_ERROR, normalizedData?.message || '请求失败', {
           code: status,
           suggestion: '请检查请求参数是否正确'
         });
       }
+
       if (error.request) {
         throw new QccError(ErrorType.NETWORK_ERROR, '网络错误，无法连接到服务器', {
           recoverable: true,
           suggestion: '请检查网络连接和服务器地址是否正确'
         });
       }
+
       throw error;
     }
   );
@@ -147,9 +146,10 @@ function createHttpClient(options = {}) {
  * @returns {object|null} 解析后的 JSON 对象
  */
 function parseSSEResponse(data) {
-  if (!data) return null;
+  if (!data) {
+    return null;
+  }
 
-  // 处理 SSE 格式: "event: message\ndata: {...}"
   const lines = data.split('\n');
   let jsonData = null;
 
@@ -158,8 +158,7 @@ function parseSSEResponse(data) {
       const jsonStr = line.substring(5).trim();
       try {
         jsonData = JSON.parse(jsonStr);
-      } catch (e) {
-        // 尝试继续解析
+      } catch (error) {
         continue;
       }
     }
@@ -171,20 +170,21 @@ function parseSSEResponse(data) {
 /**
  * 从 MCP 响应中提取内容
  * @param {object} response - MCP 响应对象
- * @returns {object|null} 提取的内容
+ * @returns {object|string|Array|null} 提取的内容
  */
 function extractMcpContent(response) {
-  if (!response) return null;
+  if (!response) {
+    return null;
+  }
 
-  // 标准 JSON 响应
   if (response.result?.content) {
     const content = response.result.content;
     if (Array.isArray(content) && content.length > 0) {
-      const textContent = content.find(c => c.type === 'text');
+      const textContent = content.find((item) => item.type === 'text');
       if (textContent?.text) {
         try {
           return JSON.parse(textContent.text);
-        } catch (e) {
+        } catch (error) {
           return textContent.text;
         }
       }
@@ -198,9 +198,8 @@ function extractMcpContent(response) {
 /**
  * 处理错误并输出用户友好的消息
  * @param {Error} error - 错误对象
- * @param {object} context - 上下文信息
  */
-function handleError(error, context = {}) {
+function handleError(error) {
   console.error(chalk.red(`\n错误: ${error.message}`));
 
   if (error instanceof QccError) {
@@ -211,7 +210,6 @@ function handleError(error, context = {}) {
     console.error(chalk.gray(`详细信息: ${error.stack}`));
   }
 
-  // 如果是可恢复错误，提示重试
   if (error.recoverable) {
     console.log(chalk.gray('这是一个临时性错误，可以稍后重试。'));
   }
