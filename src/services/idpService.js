@@ -38,6 +38,7 @@ const IDP_PROCESSING_MESSAGE = '任务已提交，解析处理中，请调用 ge
 const IDP_SUCCESS_MESSAGE = '任务处理成功。';
 const IDP_FAILED_MESSAGE = '任务处理失败。';
 const IDP_UPLOAD_RESPONSE_INVALID_MESSAGE = '文档提交未完成，服务返回内容异常。';
+const IDP_TASK_RESPONSE_INVALID_MESSAGE = '文档解析服务返回内容异常。';
 const IDP_SERVICE_RESPONSE_INVALID_SUGGESTION = '请稍后重试；如持续失败，请联系管理员排查文档提交服务。';
 const IDP_SERVICE_FAILURE_SUGGESTION = '请检查网络连接和授权配置，或稍后重试。';
 const DEFAULT_IDP_TIMEOUT_MS = configService.DEFAULT_CONFIG.mcp.timeout;
@@ -94,21 +95,37 @@ function isIdpEnvelope(data) {
   return data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, 'status');
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isValidIdpTaskEnvelope(data) {
+  if (!isRecord(data) || !['processing', 'success', 'failed'].includes(data.status)) {
+    return false;
+  }
+  if (data.status === 'processing' || data.status === 'success') {
+    return isNonEmptyString(data.task_id);
+  }
+  return (data.task_id === null || isNonEmptyString(data.task_id))
+    && isRecord(data.error)
+    && Number.isSafeInteger(data.error.code)
+    && data.error.code > 0;
+}
+
 function normalizeHttpResponse(response) {
-  if (isIdpEnvelope(response.data)) {
-    const normalized = normalizeIdpEnvelope(response.data);
-    throwIdpAuthErrorIfNeeded(normalized);
-    return normalized;
+  if (isValidIdpTaskEnvelope(response.data)) {
+    throwIdpAuthErrorIfNeeded(response.data);
+    return response.data;
   }
 
-  if (response.status >= 400) {
-    throw new QccError(ErrorType.MCP_ERROR, response.data?.message || `IDP HTTP Gateway 请求失败: ${response.status}`, {
-      code: response.status,
-      suggestion: '请检查请求参数、鉴权配置和 gateway 状态'
-    });
-  }
-
-  return response.data;
+  throw new QccError(ErrorType.MCP_ERROR, IDP_TASK_RESPONSE_INVALID_MESSAGE, {
+    code: response.status,
+    suggestion: IDP_SERVICE_RESPONSE_INVALID_SUGGESTION
+  });
 }
 
 function throwIdpAuthErrorIfNeeded(normalized) {
@@ -326,7 +343,7 @@ function createUploadTimeoutError(message) {
     recoverable: true,
     suggestion: message === '文档上传响应等待超时'
       ? '文档提交结果未确认，请稍后重新提交。'
-      : '文档提交未完成，请检查网络后重新提交。'
+      : '请重新提交；如仍失败，请检查网络连接。'
   });
 }
 
@@ -658,11 +675,22 @@ function createRawUploadClient(options = {}) {
 }
 
 function normalizeCreateUploadUrlResponse(response) {
-  const data = normalizeHttpResponse(response);
-  if (isIdpEnvelope(data)) {
-    return data;
+  if (isIdpEnvelope(response.data)) {
+    const normalized = normalizeIdpEnvelope(response.data);
+    throwIdpAuthErrorIfNeeded(normalized);
+    if (normalized.status === 'failed') {
+      return normalized;
+    }
   }
 
+  if (response.status >= 400) {
+    throw new QccError(ErrorType.MCP_ERROR, IDP_UPLOAD_RESPONSE_INVALID_MESSAGE, {
+      code: response.status,
+      suggestion: IDP_SERVICE_RESPONSE_INVALID_SUGGESTION
+    });
+  }
+
+  const data = response.data;
   if (!isCreateUploadUrlResponse(data)) {
     throw new QccError(ErrorType.MCP_ERROR, IDP_UPLOAD_RESPONSE_INVALID_MESSAGE, {
       code: 400204,
@@ -713,7 +741,7 @@ async function uploadLocalFileToGateway(file, remoteConfig, httpClient, rawUploa
   if (activeLocalUploads >= 1) {
     throw new QccError(ErrorType.MCP_ERROR, '文档提交频繁', {
       code: 100218,
-      suggestion: '文档提交较为频繁，已触发提交保护，本次请求暂未提交。请稍后再试。'
+      suggestion: '已触发提交保护，本次请求暂未提交，请稍后再试。'
     });
   }
 
@@ -782,6 +810,21 @@ function buildLocalEncryptionErrorDetails(encryptionResult) {
   };
 }
 
+function createLocalEncryptionError(encryptionResult) {
+  const code = encryptionResult.status === 'encrypted'
+    ? 100222
+    : encryptionResult.reasonCode === 'LOCAL_FILE_READ_FAILED'
+      ? 100202
+      : 100213;
+  const description = getIdpErrorDescription(code);
+  return createCliIdpError(
+    code,
+    description,
+    getIdpErrorExplanation(code, description),
+    buildLocalEncryptionErrorDetails(encryptionResult)
+  );
+}
+
 async function parseDocument(payload, options = {}) {
   const remoteConfig = options.remoteConfig || resolveIdpHttpConfig();
   const httpClient = options.httpClient || createHttpClient();
@@ -800,21 +843,11 @@ async function parseDocument(payload, options = {}) {
         });
 
         if (encryptionResult.status === 'encrypted') {
-          throw createCliIdpError(
-            100222,
-            '暂不支持加密文档，请先取消密码保护后重新提交。',
-            undefined,
-            buildLocalEncryptionErrorDetails(encryptionResult)
-          );
+          throw createLocalEncryptionError(encryptionResult);
         }
 
         if (encryptionResult.status === 'unknown') {
-          throw createCliIdpError(
-            100222,
-            '无法确认文档是否加密，请更换未加密且格式正常的文档后重试。',
-            '无法确认文档是否加密，请更换未加密且格式正常的文档后重试。',
-            buildLocalEncryptionErrorDetails(encryptionResult)
-          );
+          throw createLocalEncryptionError(encryptionResult);
         }
       }
 

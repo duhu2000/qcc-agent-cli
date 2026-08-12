@@ -17,7 +17,7 @@ const IDP_ERROR_CATALOG = {
   100204: {
     code: 100204,
     description: '文件类型不支持',
-    explanation: '当前文件类型暂不支持，请上传支持的文件格式后重试。'
+    explanation: '请上传支持的文件格式后重试。'
   },
   100205: {
     code: 100205,
@@ -32,7 +32,7 @@ const IDP_ERROR_CATALOG = {
   100207: {
     code: 100207,
     description: '暂不支持 ZIP',
-    explanation: '当前不支持 ZIP 压缩包，请上传解压后的支持格式文件。'
+    explanation: '请上传解压后的支持格式文件。'
   },
   100208: {
     code: 100208,
@@ -57,12 +57,12 @@ const IDP_ERROR_CATALOG = {
   100213: {
     code: 100213,
     description: '文档解析失败',
-    explanation: '文档解析任务失败，请查看文件内容或稍后重新提交。'
+    explanation: '请检查文件内容或稍后重新提交。'
   },
   100214: {
     code: 100214,
     description: '结果不可用',
-    explanation: '解析结果当前不可获取，请稍后重试或重新提交任务。'
+    explanation: '请稍后重试或重新提交任务。'
   },
   200215: {
     code: 200215,
@@ -72,37 +72,37 @@ const IDP_ERROR_CATALOG = {
   300216: {
     code: 300216,
     description: '工具无调用权限',
-    explanation: '当前调用方没有该工具权限，请确认账号授权范围。'
+    explanation: '请确认账号授权范围。'
   },
   100217: {
     code: 100217,
     description: '解析服务返回错误',
-    explanation: '解析服务返回业务错误，请根据错误说明检查后重试。'
+    explanation: '请稍后重试；如持续失败，请联系技术支持。'
   },
   100218: {
     code: 100218,
     description: '文档提交频繁',
-    explanation: '文档提交较为频繁，已触发提交保护，本次请求暂未提交。请稍后再试。'
+    explanation: '已触发提交保护，本次请求暂未提交，请稍后再试。'
   },
   100219: {
     code: 100219,
     description: '文档提交未完成',
-    explanation: '文档提交未完成，请检查网络后重新提交。'
+    explanation: '请重新提交；如仍失败，请检查网络连接。'
   },
   100220: {
     code: 100220,
     description: '文档提交信息不完整',
-    explanation: '文档提交信息不完整，请升级客户端或重新提交。'
+    explanation: '请升级客户端或重新提交。'
   },
   100221: {
     code: 100221,
     description: '文档提交集中',
-    explanation: '当前文档提交较为集中，已触发提交保护，本次请求暂未提交。请稍后再试。'
+    explanation: '已触发提交保护，本次请求暂未提交，请稍后再试。'
   },
   100222: {
     code: 100222,
     description: '加密文档不支持',
-    explanation: '暂不支持加密文档，请先取消密码保护后重新提交。'
+    explanation: '请先取消密码保护后重新提交。'
   },
   400201: {
     code: 400201,
@@ -112,12 +112,12 @@ const IDP_ERROR_CATALOG = {
   400202: {
     code: 400202,
     description: '任务记录保存失败',
-    explanation: '任务记录保存失败，请稍后重试。'
+    explanation: '请稍后重试。'
   },
   400203: {
     code: 400203,
-    description: '上游调用超时',
-    explanation: '解析服务响应超时，请稍后查询任务或重新提交。'
+    description: '解析服务响应超时',
+    explanation: '请稍后重新提交。'
   },
   400204: {
     code: 400204,
@@ -127,7 +127,7 @@ const IDP_ERROR_CATALOG = {
   400205: {
     code: 400205,
     description: '解析服务不可用',
-    explanation: '解析服务暂不可用，请稍后重试。'
+    explanation: '请稍后重试。'
   },
   400299: {
     code: 400299,
@@ -136,7 +136,7 @@ const IDP_ERROR_CATALOG = {
   }
 };
 
-const FIXED_IDP_ERROR_EXPLANATION_CODES = new Set([100212, 100222]);
+const FIXED_IDP_ERROR_EXPLANATION_CODES = new Set([100212, 100218, 100219, 100220, 100221, 100222]);
 
 function isIdpErrorCode(code) {
   return Object.prototype.hasOwnProperty.call(IDP_ERROR_CATALOG, code);

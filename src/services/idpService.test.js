@@ -3,6 +3,7 @@
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
 const packageMetadata = require('../../package.json');
+const { getIdpErrorDescription, getIdpErrorExplanation } = require('../constants/idpErrors');
 
 const {
   createRawUploadClient,
@@ -14,7 +15,6 @@ const {
 } = require('./idpService');
 
 const PROCESSING_MESSAGE = '任务已提交，解析处理中，请调用 get_parse_result 工具获取状态和结果。';
-const SUCCESS_MESSAGE = '任务处理成功。';
 const UPLOAD_RESPONSE_INVALID_MESSAGE = '文档提交未完成，服务返回内容异常。';
 const SERVICE_RESPONSE_INVALID_SUGGESTION = '请稍后重试；如持续失败，请联系管理员排查文档提交服务。';
 const IDP_SERVICE_FAILURE_SUGGESTION = '请检查网络连接和授权配置，或稍后重试。';
@@ -218,7 +218,8 @@ describe('idp service configuration', () => {
           status: 200,
           data: {
             task_id: 'qcc_idp_1',
-            status: 'pending',
+            status: 'processing',
+            message: PROCESSING_MESSAGE,
             next_action: 'get_parse_result'
           }
         })
@@ -709,8 +710,8 @@ describe('idp service configuration', () => {
     })).rejects.toMatchObject({
       type: 'MCP_ERROR',
       code: 100222,
-      message: '暂不支持加密文档，请先取消密码保护后重新提交。',
-      suggestion: '暂不支持加密文档，请先取消密码保护后重新提交。',
+      message: '加密文档不支持',
+      suggestion: '请先取消密码保护后重新提交。',
       details: {
         source: 'local',
         encryption_status: 'encrypted',
@@ -751,9 +752,9 @@ describe('idp service configuration', () => {
       encryptionDetector
     })).rejects.toMatchObject({
       type: 'MCP_ERROR',
-      code: 100222,
-      message: '无法确认文档是否加密，请更换未加密且格式正常的文档后重试。',
-      suggestion: '无法确认文档是否加密，请更换未加密且格式正常的文档后重试。',
+      code: 100213,
+      message: '文档解析失败',
+      suggestion: '请检查文件内容或稍后重新提交。',
       details: {
         source: 'local',
         encryption_status: 'unknown',
@@ -764,6 +765,47 @@ describe('idp service configuration', () => {
     expect(encryptionDetector.detectLocalFileEncryption).toHaveBeenCalledWith({
       filePath: __filename,
       fileType: 'pdf'
+    });
+    expect(rawUploadClient).not.toHaveBeenCalled();
+    expect(httpClient.post).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['LOCAL_FILE_READ_FAILED', 100202, '本地文件不可读', '请确认文件存在且当前进程有读取权限。'],
+    ['OFFICE_ENCRYPTION_UNKNOWN', 100213, '文档解析失败', '请检查文件内容或稍后重新提交。'],
+    ['UNLISTED_UNKNOWN_REASON', 100213, '文档解析失败', '请检查文件内容或稍后重新提交。']
+  ])('parseDocument maps unknown local encryption reason %s to fixed code %s', async (
+    reasonCode,
+    expectedCode,
+    expectedMessage,
+    expectedSuggestion
+  ) => {
+    const encryptionDetector = {
+      detectLocalFileEncryption: jest.fn().mockResolvedValue({
+        status: 'unknown',
+        sourceType: 'local',
+        fileType: 'pdf',
+        reasonCode
+      })
+    };
+    const httpClient = { post: jest.fn() };
+    const rawUploadClient = jest.fn();
+
+    await expect(parseDocument(buildLocalFilePayload(), {
+      remoteConfig: {
+        baseUrl: 'http://localhost:8401',
+        authorization: 'Bearer TOKEN',
+        timeout: 1234
+      },
+      httpClient,
+      rawUploadClient,
+      encryptionDetector
+    })).rejects.toMatchObject({
+      type: 'MCP_ERROR',
+      code: expectedCode,
+      message: expectedMessage,
+      suggestion: expectedSuggestion,
+      details: { reason_code: reasonCode, encryption_status: 'unknown' }
     });
     expect(rawUploadClient).not.toHaveBeenCalled();
     expect(httpClient.post).not.toHaveBeenCalled();
@@ -841,6 +883,36 @@ describe('idp service configuration', () => {
     });
     expect(httpClient.post).toHaveBeenCalledTimes(1);
     expect(rawUploadClient).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    [400, 100220, '请升级客户端或重新提交。'],
+    [403, 100219, '请重新提交；如仍失败，请检查网络连接。'],
+    [429, 100221, '已触发提交保护，本次请求暂未提交，请稍后再试。']
+  ])('parseDocument uses fixed public explanation for direct uploader HTTP %s', async (
+    status,
+    expectedCode,
+    expectedSuggestion
+  ) => {
+    const rawUploadClient = jest.fn().mockResolvedValue({ status, data: {} });
+    const httpClient = {
+      post: jest.fn().mockResolvedValue({ status: 200, data: buildCreateUploadResponse() })
+    };
+
+    await expect(parseDocument(buildLocalFilePayload(), {
+      remoteConfig: {
+        baseUrl: 'http://localhost:8401',
+        authorization: 'Bearer TOKEN',
+        timeout: 1234
+      },
+      httpClient,
+      rawUploadClient,
+      encryptionDetector: createNotEncryptedDetector()
+    })).rejects.toMatchObject({
+      type: 'MCP_ERROR',
+      code: expectedCode,
+      suggestion: expectedSuggestion
+    });
   });
 
   test.each([
@@ -981,7 +1053,7 @@ describe('idp service configuration', () => {
         status: 200,
         data: {
           task_id: 'qcc_idp_url_2',
-          status: 'pending',
+          status: 'processing',
           next_action: 'get_parse_result'
         }
       })
@@ -1037,7 +1109,8 @@ describe('idp service configuration', () => {
         status: 200,
         data: {
           task_id: 'qcc_idp_url_1',
-          status: 'pending',
+          status: 'processing',
+          message: PROCESSING_MESSAGE,
           next_action: 'get_parse_result'
         }
       })
@@ -1105,12 +1178,7 @@ describe('idp service configuration', () => {
       httpClient
     });
 
-    expect(result).toEqual({
-      task_id: 'doc_url_failed_1',
-      status: 'failed',
-      message: '文件大小超过限制，请上传大小符合限制的文件后重试。',
-      error: failedEnvelope.error
-    });
+    expect(result).toEqual(failedEnvelope);
     expect(httpClient.post).toHaveBeenCalledWith(
       'http://localhost:8401/idp/parse_document',
       { file_url: 'https://files.example.com/oversized.pdf' },
@@ -1160,8 +1228,7 @@ describe('idp service configuration', () => {
 
     expect(result).toEqual({
       task_id: 'qcc_idp_1',
-      status: 'success',
-      message: SUCCESS_MESSAGE
+      status: 'success'
     });
     expect(httpClient.get).toHaveBeenCalledWith(
       'http://localhost:8401/idp/get_parse_result/qcc_idp_1',
@@ -1175,57 +1242,44 @@ describe('idp service configuration', () => {
     );
   });
 
-  test('normalizes idp error envelopes without duplicate error message field', () => {
-    const result = normalizeHttpResponse({
-      status: 400,
-      data: {
-        status: 'failed',
-        error: {
-          code: '100204',
-          description: '文件类型不支持',
-          explanation: '文件类型不支持',
-          details: { file_name: 'file' }
-        }
-      }
-    });
-
-    expect(result).toEqual({
+  test('preserves valid failed task envelopes without rebuilding fields', () => {
+    const envelope = {
       task_id: null,
       status: 'failed',
-      message: '文件类型不支持，当前文件类型暂不支持，请上传支持的文件格式后重试。',
+      message: 'gateway message',
+      extension: { contract_version: 'idp-error-v1' },
       error: {
         code: 100204,
         description: '文件类型不支持',
-        explanation: '当前文件类型暂不支持，请上传支持的文件格式后重试。',
-        details: { file_name: 'file' }
+        explanation: '文件类型不支持',
+        details: { file_name: 'file', safe_context: { retryable: false } }
       }
-    });
-    expect(result.error).not.toHaveProperty('message');
-  });
-
-  test('normalizes file size errors without hard-coded limit when gateway omits max size', () => {
+    };
     const result = normalizeHttpResponse({
       status: 400,
-      data: {
-        status: 'failed',
-        error: {
-          code: '100205',
-          description: '文件超过大小限制',
-          explanation: '文件超过大小限制'
-        }
-      }
+      data: envelope
     });
 
-    expect(result).toEqual({
+    expect(result).toEqual(envelope);
+  });
+
+  test('preserves failed task error text supplied by the Gateway', () => {
+    const envelope = {
       task_id: null,
       status: 'failed',
-      message: '文件超过大小限制，请压缩文件或拆分后重试。',
+      message: 'gateway file-size message',
       error: {
         code: 100205,
         description: '文件超过大小限制',
-        explanation: '请压缩文件或拆分后重试。'
+        explanation: 'Gateway fixed explanation'
       }
+    };
+    const result = normalizeHttpResponse({
+      status: 400,
+      data: envelope
     });
+
+    expect(result).toEqual(envelope);
   });
 
   test('throws auth error for idp authentication failure envelopes', () => {
@@ -1255,49 +1309,35 @@ describe('idp service configuration', () => {
     });
   });
 
-  test('adds fallback error for failed idp envelopes without error', () => {
-    const result = normalizeHttpResponse({
-      status: 500,
-      data: {
-        status: 'failed'
-      }
-    });
-
-    expect(result).toEqual({
-      task_id: null,
-      status: 'failed',
-      message: '服务内部异常，服务处理时发生未预期异常，请稍后重试。',
-      error: {
-        code: 400299,
-        description: '服务内部异常',
-        explanation: '服务处理时发生未预期异常，请稍后重试。'
-      }
-    });
+  test('rejects failed task envelopes without a valid error object', () => {
+    expect(() => normalizeHttpResponse({
+      status: 200,
+      data: { task_id: null, status: 'failed' }
+    })).toThrow();
   });
 
-  test('preserves upstream explanations even when they match descriptions', () => {
-    const result = normalizeHttpResponse({
-      status: 504,
-      data: {
-        status: 'failed',
-        error: {
-          code: 400203,
-          description: '上游调用超时',
-          explanation: '上游调用超时'
-        }
-      }
-    });
-
-    expect(result).toEqual({
+  test('preserves Gateway URL timeout guidance', () => {
+    const envelope = {
       task_id: null,
       status: 'failed',
-      message: '上游调用超时。',
+      message: '解析服务响应超时，请检查文件 URL 的可访问性和响应速度，确认后重新提交。',
       error: {
         code: 400203,
-        description: '上游调用超时',
-        explanation: '上游调用超时'
+        description: '解析服务响应超时',
+        explanation: '请检查文件 URL 的可访问性和响应速度，确认后重新提交。'
       }
+    };
+    const result = normalizeHttpResponse({
+      status: 504,
+      data: envelope
     });
+
+    expect(result).toEqual(envelope);
+  });
+
+  test('uses public retry semantics for local timeout fallback', () => {
+    expect(getIdpErrorDescription(400203)).toBe('解析服务响应超时');
+    expect(getIdpErrorExplanation(400203, '解析服务响应超时')).toBe('请稍后重新提交。');
   });
 
   test('getParseResult hides gateway configuration details on unexpected result request failures', async () => {
@@ -1329,33 +1369,10 @@ describe('idp service configuration', () => {
     );
   });
 
-  test('compacts null fields in idp detail records without renaming detail error fields', () => {
-    const result = normalizeHttpResponse({
-      status: 200,
-      data: {
-        task_id: 'qcc_idp_1',
-        status: 'success',
-        details: [
-          {
-            file_name: 'demo.pdf',
-            file_type: 'pdf',
-            status: 'success',
-            start_page_id: 0,
-            end_page_id: 0,
-            error_code: null,
-            error_msg: null,
-            error_message: null,
-            result_error: null,
-            result_md: '# ok'
-          }
-        ]
-      }
-    });
-
-    expect(result).toEqual({
+  test('preserves valid success detail fields and null values exactly', () => {
+    const envelope = {
       task_id: 'qcc_idp_1',
       status: 'success',
-      message: SUCCESS_MESSAGE,
       details: [
         {
           file_name: 'demo.pdf',
@@ -1363,9 +1380,50 @@ describe('idp service configuration', () => {
           status: 'success',
           start_page_id: 0,
           end_page_id: 0,
+          error_code: null,
+          error_msg: null,
+          error_message: null,
+          result_error: null,
           result_md: '# ok'
         }
       ]
+    };
+    const result = normalizeHttpResponse({
+      status: 200,
+      data: envelope
     });
+
+    expect(result).toEqual(envelope);
+  });
+
+  test.each([
+    ['array body', []],
+    ['unknown status', { task_id: 'qcc_idp_1', status: 'pending' }],
+    ['success null task id', { task_id: null, status: 'success' }],
+    ['processing empty task id', { task_id: ' ', status: 'processing' }],
+    ['failed missing error', { task_id: null, status: 'failed' }],
+    ['failed non-integer code', { task_id: null, status: 'failed', error: { code: '400205' } }],
+    ['failed zero code', { task_id: null, status: 'failed', error: { code: 0 } }]
+  ])('rejects non-standard parse/result task envelope: %s', (_name, data) => {
+    expect(() => normalizeHttpResponse({ status: 200, data })).toThrow();
+  });
+
+  test.each([
+    {
+      task_id: null,
+      status: 'failed',
+      message: 'safe failure',
+      error: { code: 987654, description: 'unknown local catalog code' },
+      extension: { keep: true }
+    },
+    {
+      task_id: 'qcc_idp_processing_1',
+      status: 'processing',
+      message: 'processing from Gateway',
+      next_action: 'custom_next_action',
+      extension: { keep: true }
+    }
+  ])('preserves a minimally valid task envelope exactly', (envelope) => {
+    expect(normalizeHttpResponse({ status: 502, data: envelope })).toEqual(envelope);
   });
 });
