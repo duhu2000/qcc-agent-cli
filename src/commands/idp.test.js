@@ -33,6 +33,7 @@ describe('document parse command progress notice', () => {
   });
 
   afterEach(() => {
+    process.exitCode = 0;
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -106,7 +107,7 @@ describe('document parse command progress notice', () => {
     expect(stdoutSpy).not.toHaveBeenCalled();
   });
 
-  test('prints a valid failed business envelope unchanged and keeps exit code successful', async () => {
+  test('prints a valid failed business envelope unchanged and sets a failure exit code', async () => {
     const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => undefined);
     const canonicalResult = {
       task_id: 'qcc-task-canonical-1',
@@ -144,13 +145,16 @@ describe('document parse command progress notice', () => {
 
     await parseDocument({ file_url: 'https://files.qcc.com/sample.pdf' });
     await parseDocument({ file_url: 'https://files.qcc.com/sample.pdf' });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
     await parseDocument({ file_url: 'https://files.qcc.com/sample.pdf' });
 
     expect(stdoutSpy).toHaveBeenNthCalledWith(1, JSON.stringify(canonicalResult, null, 2));
     expect(stdoutSpy).toHaveBeenNthCalledWith(2, JSON.stringify(cleanedResult, null, 2));
     expect(stdoutSpy).toHaveBeenNthCalledWith(3, JSON.stringify(processingResult, null, 2));
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('400205'));
+    expect(process.exitCode).toBe(0);
   });
 
   test('prints a valid get_parse_result business envelope unchanged', async () => {
@@ -168,6 +172,7 @@ describe('document parse command progress notice', () => {
 
     expect(stdoutSpy).toHaveBeenCalledWith(JSON.stringify(result, null, 2));
     expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
   test('keeps non-standard responses and 200215 on the existing error exit path', async () => {

@@ -200,6 +200,8 @@ qcc <server> <tool> --<paramKey> "<paramValue>" [--<filterKey> "<filterValue>"]
 
 **通用参数：**
 - `--json`：输出原始 JSON 格式（默认输出 Markdown 格式化结果）
+- MCP 工具错误、JSON-RPC 错误和 HTTP 请求失败均退出 1。`--json` 成功时仍输出解包后的业务对象；失败时 stdout 保留完整原始 CallToolResult、JSON-RPC 响应或可解析 HTTP 响应体，进度、缓存和可读诊断写 stderr。
+- 独立 `document parse_document`（URL/本地文件）和 `document get_parse_result` 原样输出任务 JSON：`failed` 退出 1，`processing/success` 退出 0。明确 `300008` 时请充值到账后重新调用；CLI 不自动重试、重传或重新提交。历史 `100211` 保持原义。
 - 可选过滤参数按工具 schema 追加；CLI 会按工具 schema 自动转换数字、布尔值和数组。
 - 数组类型参数可传单个值，例如 `--role "原告"`；多个值请重复传入同一选项，例如 `--role "原告" --role "被告"`。
 

@@ -4,7 +4,9 @@ const {
   extractMcpContent,
   QccError,
   ErrorType,
-  isAuthErrorResponse
+  isAuthErrorResponse,
+  getCreditBalanceInfo,
+  buildMcpResponseError
 } = require('../utils/httpClient');
 const configService = require('./configService');
 const mcpServers = require('../config/mcpServers.json');
@@ -26,6 +28,8 @@ function normalizeMcpRequestError(error, config) {
       serverCode: error.serverCode,
       serverMessage: error.serverMessage || error.message,
       requestUrl: error.requestUrl,
+      rawResponse: error.rawResponse,
+      details: error.details,
       suggestion: [
         `当前 mcp.baseUrl：${config.baseUrl}`,
         `正确默认地址：${configService.MCP_DEFAULT_BASE_URL}`,
@@ -192,14 +196,16 @@ class McpService {
           code,
           serverCode: code,
           serverMessage: message,
+          rawResponse: response,
           suggestion: '身份凭证错误，请检查 Authorization 是否正确，或运行 qcc init 更新配置'
         });
       }
 
-      throw new QccError(ErrorType.MCP_ERROR, message, {
+      throw buildMcpResponseError(response) || new QccError(ErrorType.MCP_ERROR, message, {
         code,
         serverCode: code,
         serverMessage: message,
+        rawResponse: response,
         suggestion: '请检查服务权限或稍后重试'
       });
     };
@@ -254,7 +260,8 @@ class McpService {
           httpStatus: error.httpStatus,
           serverCode: error.serverCode,
           serverMessage: error.serverMessage,
-          requestUrl: error.requestUrl
+          requestUrl: error.requestUrl,
+          details: error.details
         };
       }
     }));
@@ -279,6 +286,16 @@ class McpService {
       return {
         message: '请检查身份凭证是否有效: qcc init --authorization "Bearer YOUR_API_KEY"',
         suggestion: authFailure.suggestion || '请检查 Authorization 是否正确，或运行 qcc init 更新配置'
+      };
+    }
+
+    const balanceFailure = failures.find(result => getCreditBalanceInfo({ code: result.serverCode, data: result.details }));
+    if (balanceFailure) {
+      const balance = getCreditBalanceInfo({ code: balanceFailure.serverCode, data: balanceFailure.details });
+      return {
+        message: balance.suggestion, suggestion: balance.suggestion,
+        httpStatus: balanceFailure.httpStatus, serverCode: balanceFailure.serverCode,
+        details: balanceFailure.details
       };
     }
 
@@ -367,7 +384,8 @@ class McpService {
         httpStatus: error.httpStatus,
         serverCode: error.serverCode,
         serverMessage: error.serverMessage,
-        requestUrl: error.requestUrl
+        requestUrl: error.requestUrl,
+        details: error.details
       }
     });
   }
@@ -461,12 +479,13 @@ class McpService {
       return extractMcpContent(sseData);
     }
 
+    let jsonData;
     try {
-      const jsonData = JSON.parse(data);
-      return extractMcpContent(jsonData);
+      jsonData = JSON.parse(data);
     } catch (error) {
       return data;
     }
+    return extractMcpContent(jsonData);
   }
 
   getServers() {

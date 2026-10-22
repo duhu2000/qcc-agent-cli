@@ -11,6 +11,7 @@ function buildFailureResults(failedItems) {
       httpStatus: item.httpStatus,
       serverCode: item.serverCode,
       serverMessage: item.serverMessage,
+      details: item.details,
       requestUrl: item.requestUrl
     };
     return acc;
@@ -112,6 +113,7 @@ async function updateTools(options = {}) {
         httpStatus: error.httpStatus,
         serverCode: error.serverCode,
         serverMessage: error.serverMessage,
+        details: error.details,
         requestUrl: error.requestUrl
       });
 

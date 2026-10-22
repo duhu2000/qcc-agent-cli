@@ -52,7 +52,59 @@ class QccError extends Error {
     if (options.details !== undefined) {
       this.details = options.details;
     }
+    if (options.rawResponse !== undefined) {
+      this.rawResponse = options.rawResponse;
+    }
   }
+}
+
+// 仅在已确认的协议/HTTP/文档失败上下文中识别固定位置，不递归扫描普通业务数据。
+function getCreditBalanceInfo(body) {
+  const code = body?.error?.code ?? body?.code;
+  if (code !== 300008 && code !== '300008') return null;
+  const details = body?.error?.details ?? body?.error?.data ?? body?.data;
+  let suggestion = '积分余额不足，请充值到账后重新调用';
+  const entry = details?.recharge_entry;
+  if (typeof entry === 'string') {
+    try {
+      const url = new URL(entry);
+      if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) {
+        suggestion += `\n充值入口：${entry}`;
+      }
+    } catch {
+      // 缺失或无效的行动字段不改变已经确认的业务错误码。
+    }
+  }
+  return { serverCode: code, details, suggestion };
+}
+
+function getResponseErrorMessage(body) {
+  const error = body?.error || body;
+  return [...new Set([body?.message, error?.message, error?.description, error?.explanation]
+    .filter(value => typeof value === 'string' && value.trim()))].join('\n');
+}
+
+function buildMcpResponseError(response) {
+  const rpcError = response?.jsonrpc === '2.0' && response.error;
+  const toolError = response?.result?.isError === true;
+  if (!rpcError && !toolError) return null;
+  const rawResponse = rpcError ? response : response.result;
+  const bodies = rpcError ? [response] : [
+    response.result.structuredContent,
+    ...(Array.isArray(response.result.content) ? response.result.content : [])
+      .filter(item => item.type === 'text').map(item => normalizeErrorData(item.text))
+  ].filter(value => value !== undefined);
+  const balance = bodies.map(getCreditBalanceInfo).find(Boolean);
+  const serverCode = balance?.serverCode
+    ?? bodies.map(body => body?.error?.code ?? body?.code).find(code => code !== undefined);
+  const message = bodies.map(body => typeof body === 'string' ? body : getResponseErrorMessage(body))
+    .filter(Boolean).join('\n') || 'MCP 工具执行失败';
+  return new QccError(ErrorType.MCP_ERROR, message, {
+    rawResponse, serverCode, serverMessage: message,
+    details: balance?.details,
+    suggestion: balance?.suggestion || '',
+    recoverable: false
+  });
 }
 
 function normalizeErrorData(data) {
@@ -103,7 +155,7 @@ function getServerErrorDetails(data) {
   return {
     normalizedData,
     serverCode: normalizedData?.error?.code ?? normalizedData?.code,
-    serverMessage: normalizedData?.error?.message ?? normalizedData?.message
+    serverMessage: getResponseErrorMessage(normalizedData)
   };
 }
 
@@ -158,12 +210,15 @@ function createHttpClient(options = {}) {
       if (error.response) {
         const { status, data } = error.response;
         const { normalizedData, serverCode, serverMessage } = getServerErrorDetails(data);
+        const balance = getCreditBalanceInfo(normalizedData);
         const errorMetadata = {
           code: status,
           httpStatus: status,
           serverCode,
           serverMessage,
-          requestUrl
+          requestUrl,
+          details: balance?.details,
+          ...(normalizedData && typeof normalizedData === 'object' ? { rawResponse: normalizedData } : {})
         };
 
         if (isAuthErrorResponse(status, normalizedData)) {
@@ -180,14 +235,14 @@ function createHttpClient(options = {}) {
         if (status >= 500) {
           throw new QccError(ErrorType.SERVER_ERROR, serverMessage || `服务器错误: ${status}`, {
             ...errorMetadata,
-            recoverable: true,
-            suggestion: '服务端暂时不可用，请稍后重试'
+            recoverable: !balance,
+            suggestion: balance?.suggestion || '服务端暂时不可用，请稍后重试'
           });
         }
 
         throw new QccError(ErrorType.MCP_ERROR, serverMessage || '请求失败', {
           ...errorMetadata,
-          suggestion: getHttpErrorSuggestion(status)
+          suggestion: balance?.suggestion || getHttpErrorSuggestion(status)
         });
       }
 
@@ -216,17 +271,17 @@ function parseSSEResponse(data) {
     return null;
   }
 
-  const lines = data.split('\n');
+  const events = data.replace(/\r\n?/g, '\n').split('\n\n');
   let jsonData = null;
 
-  for (const line of lines) {
-    if (line.startsWith('data:')) {
-      const jsonStr = line.substring(5).trim();
-      try {
-        jsonData = JSON.parse(jsonStr);
-      } catch (error) {
-        continue;
-      }
+  for (const event of events) {
+    const jsonStr = event.split('\n')
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.substring(5)).join('\n');
+    try {
+      jsonData = JSON.parse(jsonStr);
+    } catch (error) {
+      continue;
     }
   }
 
@@ -242,6 +297,9 @@ function extractMcpContent(response) {
   if (!response) {
     return null;
   }
+
+  const failure = buildMcpResponseError(response);
+  if (failure) throw failure;
 
   if (response.result?.content) {
     const content = response.result.content;
@@ -290,5 +348,8 @@ module.exports = {
   createHttpClient,
   parseSSEResponse,
   extractMcpContent,
+  buildMcpResponseError,
+  getCreditBalanceInfo,
+  getResponseErrorMessage,
   handleError
 };

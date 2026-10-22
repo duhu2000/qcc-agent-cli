@@ -7,21 +7,8 @@ const validator = require('../utils/validator');
 const configService = require('../services/configService');
 const { buildToolCommandExample, getArrayParamHint } = require('../utils/commandExample');
 
-function printJsonRpcError(result) {
-  console.error(chalk.red(`  code: ${result.error?.code ?? '-'}`));
-  console.error(chalk.red(`  message: ${result.error?.message || '-'}`));
-
-  if (Object.prototype.hasOwnProperty.call(result.error || {}, 'data')) {
-    const data = result.error.data == null
-      ? '-'
-      : typeof result.error.data === 'string'
-        ? result.error.data
-        : JSON.stringify(result.error.data, null, 2);
-    console.error(chalk.red(`  data: ${data}`));
-  }
-}
-
 async function callMcp(serverName, toolName, params, options = {}) {
+  const log = options.json ? console.error : console.log;
   if (!configService.isMcpConfigValid()) {
     try {
       configService.getMcpConfig();
@@ -41,39 +28,41 @@ async function callMcp(serverName, toolName, params, options = {}) {
   }
 
   if (configService.isToolsCacheExpired()) {
-    console.log(chalk.gray('工具缓存已过期，正在从服务器更新...\n'));
+    log(chalk.gray('工具缓存已过期，正在从服务器更新...\n'));
     try {
       const updated = await mcpService.ensureToolsCache(serverName);
       if (!updated) {
         const failureSummary = mcpService.getLastUpdateFailureSummary();
-        console.log(chalk.yellow('缓存更新失败，使用已有缓存\n'));
+        log(chalk.yellow('缓存更新失败，使用已有缓存\n'));
         if (failureSummary?.message) {
-          console.log(chalk.yellow(`${failureSummary.message}\n`));
+          log(chalk.yellow(`${failureSummary.message}\n`));
         }
       }
     } catch (error) {
       if (error.type === 'AUTH_FAILED') {
         console.error(chalk.red('错误: 更新失败: 凭证不正确\n'));
         console.error(chalk.red('错误: 工具列表获取失败'));
-        console.log(chalk.yellow('建议: 请检查 Authorization 是否正确，或运行 qcc init 更新配置'));
+        console.error(chalk.yellow('建议: 请检查 Authorization 是否正确，或运行 qcc init 更新配置'));
         process.exit(1);
       } else {
         const failureSummary = mcpService.getFailureSummaryFromError(error);
-        console.log(chalk.yellow(`更新失败: ${error.message}\n`));
+        log(chalk.yellow(`更新失败: ${error.message}\n`));
         if (failureSummary?.message) {
-          console.log(chalk.yellow(`${failureSummary.message}\n`));
+          log(chalk.yellow(`${failureSummary.message}\n`));
         }
       }
     }
   }
 
-  const tool = findTool(serverName, toolName);
+  // 刷新失败后复用既有旧缓存；与启动时选择的降级工具列表保持一致。
+  const tool = findTool(serverName, toolName)
+    || configService.loadToolsCacheWithFallback()?.[serverName]?.tools?.find(item => item.name === toolName);
   if (!tool) {
     const shortNames = mcpService.getShortServerNames();
     console.error(chalk.red(`错误: 未找到工具 "${serverName}/${toolName}"`));
-    console.log(chalk.yellow('使用 "qcc list-tools" 查看可用工具'));
-    console.log(chalk.yellow('或运行 "qcc update" 更新工具列表'));
-    console.log(chalk.yellow(`可用服务: ${shortNames.join(', ')}`));
+    log(chalk.yellow('使用 "qcc list-tools" 查看可用工具'));
+    log(chalk.yellow('或运行 "qcc update" 更新工具列表'));
+    log(chalk.yellow(`可用服务: ${shortNames.join(', ')}`));
     process.exit(1);
     return;
   }
@@ -88,31 +77,25 @@ async function callMcp(serverName, toolName, params, options = {}) {
     const example = buildToolCommandExample(serverName, toolName, tool, params);
     const arrayHint = getArrayParamHint(tool, params);
 
-    console.log(chalk.yellow('\n正确调用示例:'));
-    console.log(chalk.gray(`  ${example}`));
+    log(chalk.yellow('\n正确调用示例:'));
+    log(chalk.gray(`  ${example}`));
     if (arrayHint) {
-      console.log(chalk.gray(`  ${arrayHint}`));
+      log(chalk.gray(`  ${arrayHint}`));
     }
 
-    console.log(chalk.yellow('\n工具参数说明:'));
+    log(chalk.yellow('\n工具参数说明:'));
     Object.entries(props).forEach(([key, value]) => {
       const isRequired = required.includes(key);
       const reqMark = isRequired ? chalk.red('(必填)') : chalk.gray('(可选)');
-      console.log(chalk.gray(`  --${key} ${reqMark} ${value.description || ''}`));
+      log(chalk.gray(`  --${key} ${reqMark} ${value.description || ''}`));
     });
     process.exit(1);
   }
 
   try {
-    console.log(chalk.gray(`正在调用 ${serverName}/${toolName}...\n`));
+    log(chalk.gray(`正在调用 ${serverName}/${toolName}...\n`));
 
     const result = await mcpService.callTool(serverName, toolName, validation.params);
-
-    if (!options.json && result?.error) {
-      printJsonRpcError(result);
-      process.exit(1);
-      return;
-    }
 
     if (options.json) {
       try {
@@ -131,14 +114,22 @@ async function callMcp(serverName, toolName, params, options = {}) {
     }
   } catch (error) {
     if (error instanceof QccError) {
+      if (options.json && error.rawResponse !== undefined) {
+        console.log(JSON.stringify(error.rawResponse, null, 2));
+      }
       console.error(chalk.red(`\n错误: ${error.message}`));
+      if (error.serverMessage && error.serverMessage !== error.message) {
+        console.error(chalk.red(`  原因: ${error.serverMessage}`));
+      }
+      if (error.serverCode !== undefined) console.error(chalk.red(`  code: ${error.serverCode}`));
       if (error.suggestion) {
         console.error(chalk.yellow(`建议:\n${error.suggestion}`));
       }
     } else {
       console.error(chalk.red(`\n错误: ${error.message}`));
     }
-    process.exit(1);
+    // Let stdout/stderr drain before the failed command exits.
+    process.exitCode = 1;
   }
 }
 

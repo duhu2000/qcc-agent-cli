@@ -74,18 +74,21 @@ function buildFailureResults(failedItems = []) {
       httpStatus: item.httpStatus,
       serverCode: item.serverCode,
       serverMessage: item.serverMessage,
+      details: item.details,
       requestUrl: item.requestUrl
     };
     return acc;
   }, {});
 }
 
-async function refreshToolsIfServiceCacheEmpty(serverName) {
+async function refreshToolsIfServiceCacheEmpty(serverName, useFallback = false) {
   if (!mcpService.getServerByShortName(serverName)) {
     return { attempted: false, failed: false };
   }
 
-  const cachedTools = getServerToolsFromCache(serverName);
+  const cachedTools = useFallback
+    ? getServerToolsFromCacheWithFallback(serverName)
+    : getServerToolsFromCache(serverName);
   if (cachedTools.length > 0) {
     return { attempted: false, failed: false };
   }
@@ -99,16 +102,16 @@ async function refreshToolsIfServiceCacheEmpty(serverName) {
 
   const serverFailure = results.failed.find((item) => item.server === serverName);
   if (serverFailure) {
-    console.log(chalk.red(`获取 ${serverName} 工具列表失败: ${serverFailure.error}`));
+    console.error(chalk.red(`获取 ${serverName} 工具列表失败: ${serverFailure.error}`));
     if (serverFailure.suggestion) {
-      console.log(chalk.yellow(`建议: ${serverFailure.suggestion}`));
+      console.error(chalk.yellow(`建议: ${serverFailure.suggestion}`));
     }
     return { attempted: true, failed: true };
   }
 
   const failureSummary = mcpService.getUpdateFailureSummary(buildFailureResults(results.failed));
   if (failureSummary?.message) {
-    console.log(chalk.yellow(`建议: ${failureSummary.message}`));
+    console.error(chalk.yellow(`建议: ${failureSummary.message}`));
   }
 
   return { attempted: true, failed: true };
@@ -935,6 +938,7 @@ function orderPublicCommands(program) {
 
 async function createProgram(argv = process.argv.slice(2)) {
   const program = new Command();
+  const log = argv.includes('--json') ? console.error : console.log;
 
   program
     .name('qcc')
@@ -966,44 +970,44 @@ async function createProgram(argv = process.argv.slice(2)) {
   const cacheExists = fs.existsSync(cachePath);
 
   if (!shouldSkipBootstrapCacheRefresh(argv) && (!cacheExists || configService.isToolsCacheExpired())) {
-    console.log(chalk.gray('工具缓存不存在或已过期，正在从服务器更新...'));
+    log(chalk.gray('工具缓存不存在或已过期，正在从服务器更新...'));
     try {
       const success = await mcpService.ensureToolsCache();
       if (success) {
-        console.log(chalk.green('✓ 缓存更新完成。\n'));
+        log(chalk.green('✓ 缓存更新完成。\n'));
       } else {
         useFallback = true;
         const failureSummary = mcpService.getLastUpdateFailureSummary();
-        console.log(chalk.yellow('缓存更新失败，将使用已有缓存。'));
+        log(chalk.yellow('缓存更新失败，将使用已有缓存。'));
         if (failureSummary?.message) {
-          console.log(chalk.yellow(`建议: ${failureSummary.message}\n`));
+          log(chalk.yellow(`建议: ${failureSummary.message}\n`));
         } else {
-          console.log('');
+          log('');
         }
       }
     } catch (error) {
       if (error.type === 'AUTH_FAILED') {
         authFailed = true;
-        console.log(chalk.red('缓存更新失败: 凭证不正确'));
-        console.log(chalk.yellow('建议: 请检查 Authorization 是否正确，或运行 qcc init 更新配置\n'));
+        log(chalk.red('缓存更新失败: 凭证不正确'));
+        log(chalk.yellow('建议: 请检查 Authorization 是否正确，或运行 qcc init 更新配置\n'));
         console.error(chalk.red('错误: 工具列表获取失败'));
-        console.log(chalk.yellow('请检查 Authorization 是否正确，或运行 qcc init 更新配置'));
+        log(chalk.yellow('请检查 Authorization 是否正确，或运行 qcc init 更新配置'));
         process.exit(1);
       }
 
       useFallback = true;
       const failureSummary = mcpService.getFailureSummaryFromError(error);
-      console.log(chalk.yellow(`缓存更新失败: ${error.message}`));
+      log(chalk.yellow(`缓存更新失败: ${error.message}`));
       if (failureSummary?.message) {
-        console.log(chalk.yellow(`建议: ${failureSummary.message}`));
+        log(chalk.yellow(`建议: ${failureSummary.message}`));
       }
-      console.log(chalk.yellow('将使用已有缓存。\n'));
+      log(chalk.yellow('将使用已有缓存。\n'));
     }
   }
 
   const requestedService = getRequestedServiceForInvocation(argv);
   if (requestedService) {
-    const refreshState = await refreshToolsIfServiceCacheEmpty(requestedService);
+    const refreshState = await refreshToolsIfServiceCacheEmpty(requestedService, useFallback);
     if (refreshState.failed) {
       process.exit(1);
     }

@@ -1,7 +1,7 @@
 const chalk = require('chalk');
 const { buildParseDocumentPayload, IdpDocumentError } = require('../utils/idpDocument');
 const idpService = require('../services/idpService');
-const { QccError } = require('../utils/httpClient');
+const { QccError, getCreditBalanceInfo, getResponseErrorMessage } = require('../utils/httpClient');
 
 const PARSE_DOCUMENT_PROGRESS_NOTICE_DELAY_MS = 800;
 const PARSE_DOCUMENT_SUBMITTING_NOTICE = '正在提交文档解析任务，请稍候...';
@@ -9,6 +9,12 @@ const PARSE_DOCUMENT_WAITING_NOTICE = '正在提交文档解析任务并等待�
 
 function printJson(result) {
   console.log(JSON.stringify(result, null, 2));
+  if (result.status === 'failed') {
+    console.error(chalk.red(`错误: ${getResponseErrorMessage(result)}\n  code: ${result.error.code}`));
+    const balance = getCreditBalanceInfo(result);
+    if (balance) console.error(chalk.yellow(balance.suggestion));
+    process.exitCode = 1;
+  }
 }
 
 function getParseDocumentProgressNotice(payload) {
